@@ -1,0 +1,30 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# API keys and secrets
+test_api_key.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

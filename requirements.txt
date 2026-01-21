@@ -1,0 +1,5 @@
+qdrant-client>=1.7.0
+Faker>=20.0.0
+numpy>=1.26.0
+sentence-transformers>=2.2.2
+torch>=2.0.0
