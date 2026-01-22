@@ -13,11 +13,15 @@ COLLECTION_CONFIGS = {
         "vector_size": 384,
         "distance": models.Distance.COSINE,
         "payload_indexes": {
+            "product_id": models.PayloadSchemaType.KEYWORD,
+            "name": models.PayloadSchemaType.KEYWORD,
             "price": models.PayloadSchemaType.FLOAT,
             "category": models.PayloadSchemaType.KEYWORD,
             "brand": models.PayloadSchemaType.KEYWORD,
-            "in_stock": "BOOL",  # Special handling for booleans
+            "in_stock": models.PayloadSchemaType.BOOL,
+            "image_url": models.PayloadSchemaType.KEYWORD,
             "region": models.PayloadSchemaType.KEYWORD,
+            "monthly_installment": models.PayloadSchemaType.FLOAT,
         }
     },
 
@@ -25,8 +29,12 @@ COLLECTION_CONFIGS = {
         "vector_size": 384,
         "distance": models.Distance.COSINE,
         "payload_indexes": {
+            "user_id": models.PayloadSchemaType.KEYWORD,
+            "name": models.PayloadSchemaType.KEYWORD,
             "location": models.PayloadSchemaType.KEYWORD,
             "risk_tolerance": models.PayloadSchemaType.KEYWORD,
+            "preferred_categories": models.PayloadSchemaType.KEYWORD,
+            "preferred_brands": models.PayloadSchemaType.KEYWORD,
         }
     },
 
@@ -34,9 +42,11 @@ COLLECTION_CONFIGS = {
         "vector_size": 256,
         "distance": models.Distance.COSINE,
         "payload_indexes": {
+            "user_id": models.PayloadSchemaType.KEYWORD,
             "available_balance": models.PayloadSchemaType.FLOAT,
             "credit_limit": models.PayloadSchemaType.FLOAT,
-            "eligible_installments": "BOOL",  # Special handling for booleans
+            "current_debt": models.PayloadSchemaType.FLOAT,
+            "eligible_installments": models.PayloadSchemaType.BOOL,
         }
     },
 
@@ -45,7 +55,9 @@ COLLECTION_CONFIGS = {
         "distance": models.Distance.COSINE,
         "payload_indexes": {
             "user_id": models.PayloadSchemaType.KEYWORD,
-            "purchased": "BOOL",  # Special handling for booleans
+            "query": models.PayloadSchemaType.KEYWORD,
+            "clicked_product_id": models.PayloadSchemaType.KEYWORD,
+            "purchased": models.PayloadSchemaType.BOOL,
         }
     }
 }
@@ -93,16 +105,9 @@ def create_collection_schema(client: QdrantClient, collection_name: str, config:
         )
         print(f"✅ Collection '{collection_name}' created/recreated successfully.")
 
-        # 2. Create Payload Indexes
+        # 2. Create Payload Indexes (includes BOOL fields)
         indexes = config.get("payload_indexes", {})
         for field_name, field_type in indexes.items():
-            if field_type == "BOOL":
-                # Qdrant currently does not support a specific BOOL index type in create_payload_index.
-                # Booleans are low-cardinality and usually don't benefit from inverted indexes 
-                # or are handled differently. We log this and skip explicit index creation.
-                print(f"ℹ️  Field '{field_name}' (BOOL): Skipping explicit index creation (not required/supported for BOOL).")
-                continue
-
             try:
                 client.create_payload_index(
                     collection_name=collection_name,

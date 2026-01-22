@@ -340,6 +340,7 @@ def _print_results(results: List[Dict[str, Any]]):
 
 if __name__ == "__main__":
     import uuid
+    from qdrant_client.http.models import PointStruct
     
     sample_user_id = str(uuid.uuid4())
     sample_query = "Laptop for machine learning under 1500 with installments"
@@ -348,6 +349,43 @@ if __name__ == "__main__":
     logger.info(f"Query: '{sample_query}'")
     
     try:
+        client = get_qdrant_client()
+        
+        # Create test user fixture with known profile and financial data
+        logger.info("Creating test user fixture...")
+        
+        # Test user profile
+        test_user_profile = PointStruct(
+            id=sample_user_id,
+            vector=[0.0] * 384,  # Dummy vector for retrieval
+            payload={
+                "user_id": sample_user_id,
+                "name": "Test User",
+                "location": "San Francisco",
+                "risk_tolerance": "Medium",
+                "preferred_categories": ["Computers", "Smartphones", "Accessories"],
+                "preferred_brands": ["Samsung", "OnePlus", "Apple"],
+            }
+        )
+        
+        # Test user financial context
+        test_user_financial = PointStruct(
+            id=sample_user_id,
+            vector=[0.0] * 256,  # Dummy vector for retrieval
+            payload={
+                "user_id": sample_user_id,
+                "available_balance": 5000.0,
+                "credit_limit": 10000.0,
+                "current_debt": 2000.0,
+                "eligible_installments": True,
+            }
+        )
+        
+        # Upsert test fixtures
+        client.upsert(collection_name=USER_PROFILES_COLLECTION, points=[test_user_profile])
+        client.upsert(collection_name=FINANCIAL_CONTEXTS_COLLECTION, points=[test_user_financial])
+        logger.info(f"Test fixtures created for user_id={sample_user_id}")
+        
         results = search_products(sample_user_id, sample_query, top_k=5, debug_mode=True)
         _print_results(results)
         

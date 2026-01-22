@@ -3,8 +3,9 @@ import sys
 import json
 import random
 import uuid
+import time
 import numpy as np
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from faker import Faker
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.models import PointStruct
@@ -43,7 +44,7 @@ def generate_random_vector(size: int) -> List[float]:
     return vec.tolist()
 
 def generate_text_embedding(text: str) -> List[float]:
-    """Generate a real embedding using SentenceTransformer (768 dim)."""
+    """Generate a real embedding using SentenceTransformer (384 dim)."""
     vec = embedding_model.encode(text, device=DEVICE)
     return vec.tolist()
 
@@ -75,10 +76,10 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
 
     print(f"Processing {collection_name}...")
 
-    # If source is empty, generate purely synthetic
-    count = 50 
+    # Use all source data available
+    count = len(products_source) if products_source else 50
     
-    # We loop up to 'count'. If we have source data, we use it, otherwise fake it.
+    # We loop through all available products. If we have source data, we use it, otherwise fake it.
     for i in range(count):
         product_uuid = str(uuid.uuid4())
         
@@ -92,6 +93,7 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
             price = src.get("price", round(random.uniform(10.0, 500.0), 2))
             in_stock = src.get("in_stock", True)
             region = src.get("region", fake.country())
+            image_url = src.get("image_url") or f"https://picsum.photos/seed/{product_uuid}/600/600"
         else:
             # Fallback synthetic
             name = fake.catch_phrase()
@@ -100,13 +102,13 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
             price = round(random.uniform(10.0, 500.0), 2)
             in_stock = random.choice([True, False])
             region = fake.country()
+            image_url = f"https://picsum.photos/seed/{product_uuid}/600/600"
 
         # Augment with extra fields requested
         monthly_installment = round(price / 12, 2)
-        tags = [str(fake.word()) for _ in range(3)]
 
         # Create rich text representation for embedding
-        text_to_embed = f"{name} {category} {brand} {' '.join(tags)} {region}"
+        text_to_embed = f"{name} {category} {brand} {region}"
         texts_to_embed.append(text_to_embed)
 
         payload = {
@@ -118,7 +120,7 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
             "monthly_installment": monthly_installment,
             "in_stock": in_stock,
             "region": region,
-            "tags": tags
+            "image_url": image_url,
         }
         payloads.append(payload)
         product_ids.append(product_uuid)
@@ -135,34 +137,68 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
             payload=payload
         ))
 
-    # Insert
-    client.upsert(collection_name=collection_name, points=points)
+    # Insert in batches to avoid server disconnection
+    batch_size = 100  # Reduced from 500 for Qdrant Cloud stability
+    print(f"Upserting {len(points)} points in batches of {batch_size}...")
+    for batch_start in range(0, len(points), batch_size):
+        batch_end = min(batch_start + batch_size, len(points))
+        batch = points[batch_start:batch_end]
+        
+        # Retry logic with exponential backoff
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                client.upsert(collection_name=collection_name, points=batch)
+                print(f"  ✅ Upserted points {batch_start} to {batch_end}")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1, 2, 4 seconds
+                    print(f"  ⚠️  Batch {batch_start}-{batch_end} failed (attempt {attempt+1}/{max_retries}): {type(e).__name__}. Waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"  ❌ Batch {batch_start}-{batch_end} failed after {max_retries} attempts")
+                    raise
+    
     print(f"✅ inserted {len(points)} items into '{collection_name}'")
-    return product_ids
 
-def insert_users(client: QdrantClient) -> List[str]:
-    """Generate and insert user profiles."""
+    # Build quick lookup map product_id -> payload for downstream correlation
+    product_map: Dict[str, Dict[str, Any]] = {p['product_id']: p for p in payloads}
+    return product_ids, product_map
+
+def insert_users(client: QdrantClient, product_map: Dict[str, Dict[str, Any]], count: int = 20) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+    """Generate and insert user profiles correlated to product data.
+
+    Returns tuple(user_ids, user_profile_map)
+    """
     collection_name = "user_profiles"
     vector_size = 384
     points = []
     user_ids = []
     texts_to_embed = []
     payloads = []
-    count = 20
 
     print(f"Processing {collection_name}...")
+
+    # Precompute available categories/brands from product_map
+    categories = [p.get('category', 'General') for p in product_map.values()] if product_map else []
+    brands = [p.get('brand', '') for p in product_map.values()] if product_map else []
 
     for _ in range(count):
         user_uuid = str(uuid.uuid4())
         user_ids.append(user_uuid)
+
+        # Choose preferred categories/brands from real product distribution when available
+        preferred_categories = random.sample(categories, k=2) if len(set(categories)) >= 2 else ([random.choice(categories)] if categories else ["General"])
+        preferred_brands = random.sample(brands, k=2) if len(set(brands)) >= 2 else ([random.choice(brands)] if brands else [fake.company()])
 
         payload = {
             "user_id": user_uuid,
             "name": fake.name(),
             "location": fake.city(),
             "risk_tolerance": random.choice(["Low", "Medium", "High"]),
-            "preferred_categories": [fake.word() for _ in range(2)],
-            "preferred_brands": [fake.company() for _ in range(2)]
+            "preferred_categories": preferred_categories,
+            "preferred_brands": preferred_brands
         }
 
         # Create user profile text for embedding
@@ -181,47 +217,98 @@ def insert_users(client: QdrantClient) -> List[str]:
             payload=payload
         ))
 
-    client.upsert(collection_name=collection_name, points=points)
+    # Insert in batches to avoid server disconnection
+    batch_size = 100
+    print(f"Upserting {len(points)} points in batches of {batch_size}...")
+    for batch_start in range(0, len(points), batch_size):
+        batch_end = min(batch_start + batch_size, len(points))
+        batch = points[batch_start:batch_end]
+        
+        # Retry logic with exponential backoff
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                client.upsert(collection_name=collection_name, points=batch)
+                print(f"  ✅ Upserted points {batch_start} to {batch_end}")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1, 2, 4 seconds
+                    print(f"  ⚠️  Batch {batch_start}-{batch_end} failed (attempt {attempt+1}/{max_retries}): {type(e).__name__}. Waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"  ❌ Batch {batch_start}-{batch_end} failed after {max_retries} attempts")
+                    raise
+    
     print(f"✅ inserted {len(points)} items into '{collection_name}'")
-    return user_ids
 
-def insert_financials(client: QdrantClient, user_ids: List[str]):
-    """Generate financial contexts for existing users."""
+    user_profile_map: Dict[str, Dict[str, Any]] = {p['user_id']: p for p in payloads}
+    return user_ids, user_profile_map
+
+def insert_financials(client: QdrantClient, user_profile_map: Dict[str, Dict[str, Any]], product_map: Dict[str, Dict[str, Any]]):
+    """Generate financial contexts for existing users, correlated to product prices."""
     collection_name = "financial_contexts"
     vector_size = 256
     points = []
 
     print(f"Processing {collection_name}...")
 
-    for uid in user_ids:
-        # Generate financial data
-        limit = round(random.uniform(1000, 10000), 2)
-        debt = round(random.uniform(0, limit * 0.8), 2)
-        balance = round(limit - debt, 2)
+    for uid, profile in user_profile_map.items():
+        # Derive financials from the user's preferred categories: compute avg price
+        preferred = profile.get('preferred_categories', [])
+        prices = [p['price'] for p in product_map.values() if p.get('category') in preferred and isinstance(p.get('price'), (int, float))]
+
+        if prices:
+            avg_price = sum(prices) / len(prices)
+            # credit and balance scaled to the category price
+            credit_limit = round(avg_price * random.uniform(2.0, 5.0), 2)
+            available_balance = round(avg_price * random.uniform(0.5, 2.0), 2)
+        else:
+            credit_limit = round(random.uniform(1000, 10000), 2)
+            available_balance = round(random.uniform(100, credit_limit), 2)
+
+        debt = round(random.uniform(0, credit_limit * 0.5), 2)
 
         payload = {
             "user_id": uid,
-            "available_balance": balance,
-            "credit_limit": limit,
+            "available_balance": available_balance,
+            "credit_limit": credit_limit,
             "current_debt": debt,
-            "eligible_installments": balance > 500  # Simple rule
+            "eligible_installments": available_balance > 500  # Simple rule
         }
 
-        # ID logic: often 1:1 with user_id, here we use user_uuid as point ID strictly
-        # or generate a new UUID. Using user_uuid makes lookups O(1) easier.
-        # Note: Financial context is kept as random vectors (or feature vectors) 
-        # because the schema requires 256 dimensions and it's numerical data, 
-        # not suitable for the 768-dim text embedding model.
         points.append(PointStruct(
             id=uid, 
             vector=generate_random_vector(vector_size),
             payload=payload
         ))
 
-    client.upsert(collection_name=collection_name, points=points)
+    # Insert in batches to avoid server disconnection
+    batch_size = 100
+    print(f"Upserting {len(points)} points in batches of {batch_size}...")
+    for batch_start in range(0, len(points), batch_size):
+        batch_end = min(batch_start + batch_size, len(points))
+        batch = points[batch_start:batch_end]
+        
+        # Retry logic with exponential backoff
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                client.upsert(collection_name=collection_name, points=batch)
+                print(f"  ✅ Upserted points {batch_start} to {batch_end}")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1, 2, 4 seconds
+                    print(f"  ⚠️  Batch {batch_start}-{batch_end} failed (attempt {attempt+1}/{max_retries}): {type(e).__name__}. Waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"  ❌ Batch {batch_start}-{batch_end} failed after {max_retries} attempts")
+                    raise
+    
     print(f"✅ inserted {len(points)} items into '{collection_name}'")
 
-def insert_interactions(client: QdrantClient, user_ids: List[str], product_ids: List[str]):
+def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[str, Any]], product_map: Dict[str, Dict[str, Any]]):
     """Generate interaction history."""
     collection_name = "interaction_memory"
     vector_size = 384
@@ -232,18 +319,35 @@ def insert_interactions(client: QdrantClient, user_ids: List[str], product_ids: 
 
     print(f"Processing {collection_name}...")
 
-    if not product_ids:
+    if not product_map:
         print("Warning: No products available for interactions.")
         return
 
-    for uid in user_ids:
+    # Build helper: category -> product ids
+    category_index: Dict[str, List[str]] = {}
+    all_product_ids = list(product_map.keys())
+    for pid, pdata in product_map.items():
+        cat = pdata.get('category', 'General')
+        category_index.setdefault(cat, []).append(pid)
+
+    for uid, profile in user_profile_map.items():
         # 2-3 interactions per user
         num_interactions = random.randint(2, 3)
+        preferred = profile.get('preferred_categories', [])
+
         for _ in range(num_interactions):
             interaction_uuid = str(uuid.uuid4())
-            pid = random.choice(product_ids)
             purchased = random.choice([True, False])
             query = fake.sentence(nb_words=4)
+
+            # Prefer products from user's preferred categories when available
+            candidate_ids = []
+            for cat in preferred:
+                candidate_ids.extend(category_index.get(cat, []))
+            if not candidate_ids:
+                candidate_ids = all_product_ids
+
+            pid = random.choice(candidate_ids)
 
             payload = {
                 "user_id": uid,
@@ -252,7 +356,7 @@ def insert_interactions(client: QdrantClient, user_ids: List[str], product_ids: 
                 "purchased": purchased,
                 "timestamp": fake.iso8601()
             }
-            
+
             interaction_ids.append(interaction_uuid)
             texts_to_embed.append(query)
             payloads.append(payload)
@@ -268,7 +372,29 @@ def insert_interactions(client: QdrantClient, user_ids: List[str], product_ids: 
             payload=payload
         ))
 
-    client.upsert(collection_name=collection_name, points=points)
+    # Insert in batches to avoid server disconnection
+    batch_size = 100
+    print(f"Upserting {len(points)} points in batches of {batch_size}...")
+    for batch_start in range(0, len(points), batch_size):
+        batch_end = min(batch_start + batch_size, len(points))
+        batch = points[batch_start:batch_end]
+        
+        # Retry logic with exponential backoff
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                client.upsert(collection_name=collection_name, points=batch)
+                print(f"  ✅ Upserted points {batch_start} to {batch_end}")
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1, 2, 4 seconds
+                    print(f"  ⚠️  Batch {batch_start}-{batch_end} failed (attempt {attempt+1}/{max_retries}): {type(e).__name__}. Waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"  ❌ Batch {batch_start}-{batch_end} failed after {max_retries} attempts")
+                    raise
+    
     print(f"✅ inserted {len(points)} items into '{collection_name}'")
 
 def main():
@@ -277,20 +403,21 @@ def main():
     # Setup
     client = get_qdrant_client()
     
-    # Load JSON source
-    products_source = load_product_data("data/products_payload.json", limit=50)
+    # Load product data (limit to 500 for Qdrant Cloud stability)
+    products_source = load_product_data("data/products_payload.json", limit=3000)
+    print(f"Loaded {len(products_source)} products")
 
     # A) Products
-    product_ids = insert_products(client, products_source)
+    product_ids, product_map = insert_products(client, products_source)
 
-    # B) Users
-    user_ids = insert_users(client)
+    # B) Users (derive preferences from products)
+    user_ids, user_profile_map = insert_users(client, product_map, count=1000)
 
-    # C) Financials (depends on Users)
-    insert_financials(client, user_ids)
+    # C) Financials (depends on Users and product prices)
+    insert_financials(client, user_profile_map, product_map)
 
-    # D) Interactions (depends on Users + Products)
-    insert_interactions(client, user_ids, product_ids)
+    # D) Interactions (depends on Users + Products) - correlated
+    insert_interactions(client, user_profile_map, product_map)
 
     print("\n🎉 Data generation and insertion complete.")
 
