@@ -15,6 +15,7 @@ COLLECTION_CONFIGS = {
         "payload_indexes": {
             "product_id": models.PayloadSchemaType.KEYWORD,
             "name": models.PayloadSchemaType.KEYWORD,
+            "description": models.PayloadSchemaType.KEYWORD,
             "price": models.PayloadSchemaType.FLOAT,
             "category": models.PayloadSchemaType.KEYWORD,
             "brand": models.PayloadSchemaType.KEYWORD,

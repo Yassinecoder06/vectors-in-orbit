@@ -49,22 +49,23 @@ def generate_text_embedding(text: str) -> List[float]:
     return vec.tolist()
 
 
-def load_product_data(filepath: str, limit: int = 50) -> List[Dict[str, Any]]:
-    """Load and sample product data from JSON."""
+def load_product_data(filepath: str, limit: int = None) -> List[Dict[str, Any]]:
+    """Load product data from JSON. If limit is None, load all products."""
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            # Sample random 50 if available, else take all
-            if len(data) > limit:
+            # If limit is specified and data exceeds it, sample randomly
+            if limit and len(data) > limit:
                 return random.sample(data, limit)
             return data
     except FileNotFoundError:
-        print(f"Warning: {filepath} not found. Generating purely synthetic products.")
+        print(f"Error: {filepath} not found.")
         return []
 
 def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[str]:
     """
-    Simulate product data generation/augmentation and insert into Qdrant.
+    Insert product data from JSON source into Qdrant.
+    Uses only real products from products_payload.json (no synthetic data).
     Returns list of product IDs for interaction generation.
     """
     collection_name = "products_multimodal"
@@ -76,44 +77,33 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
 
     print(f"Processing {collection_name}...")
 
-    # Use all source data available
-    count = len(products_source) if products_source else 50
-    
-    # We loop through all available products. If we have source data, we use it, otherwise fake it.
-    for i in range(count):
-        product_uuid = str(uuid.uuid4())
-        
-        # Use source data if available
-        if i < len(products_source):
-            src = products_source[i]
-            # Map fields from the JSON
-            name = src.get("description", fake.catch_phrase())
-            category = src.get("category", "General")
-            brand = src.get("brand", fake.company())
-            price = src.get("price", round(random.uniform(10.0, 500.0), 2))
-            in_stock = src.get("in_stock", True)
-            region = src.get("region", fake.country())
-            image_url = src.get("image_url") or f"https://picsum.photos/seed/{product_uuid}/600/600"
-        else:
-            # Fallback synthetic
-            name = fake.catch_phrase()
-            category = random.choice(["Home Decor", "Electronics", "Clothing", "Toys"])
-            brand = fake.company()
-            price = round(random.uniform(10.0, 500.0), 2)
-            in_stock = random.choice([True, False])
-            region = fake.country()
-            image_url = f"https://picsum.photos/seed/{product_uuid}/600/600"
+    if not products_source:
+        print(f"❌ Error: No products loaded from products_payload.json")
+        return []
 
-        # Augment with extra fields requested
-        monthly_installment = round(price / 12, 2)
+    # Use ALL products from the source (no synthetic fallback)
+    for src in products_source:
+        product_id = src.get("product_id", str(uuid.uuid4()))
+        name = src.get("name", "Unknown Product")
+        category = src.get("category", "General")
+        brand = src.get("brand", "Unknown")
+        price = float(src.get("price", 0.0))
+        in_stock = src.get("in_stock", True)
+        region = src.get("region", "Unknown")
+        image_url = src.get("image_url", f"https://example.com/images/{product_id}.jpg")
+        monthly_installment = src.get("monthly_installment", round(price / 12, 2))
+
+        # Create description from product attributes
+        description = f"{brand} {category} available in {region}"
 
         # Create rich text representation for embedding
-        text_to_embed = f"{name} {category} {brand} {region}"
+        text_to_embed = f"{name} {description} {category} {brand} {region}"
         texts_to_embed.append(text_to_embed)
 
         payload = {
-            "product_id": product_uuid,
+            "product_id": product_id,
             "name": name,
+            "description": description,
             "category": category,
             "brand": brand,
             "price": price,
@@ -123,16 +113,16 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
             "image_url": image_url,
         }
         payloads.append(payload)
-        product_ids.append(product_uuid)
+        product_ids.append(product_id)
 
     # Batch encode all texts at once (much faster)
     print(f"Encoding {len(texts_to_embed)} product embeddings...")
     embeddings = embedding_model.encode(texts_to_embed, device=DEVICE, show_progress_bar=True, convert_to_numpy=True)
     
     # Build points with pre-computed embeddings
-    for i, (product_uuid, embedding, payload) in enumerate(zip(product_ids, embeddings, payloads)):
+    for i, (product_id, embedding, payload) in enumerate(zip(product_ids, embeddings, payloads)):
         points.append(PointStruct(
-            id=product_uuid,
+            id=i,  # Use index as ID for stability
             vector=embedding.tolist(),
             payload=payload
         ))
@@ -160,7 +150,7 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
                     print(f"  ❌ Batch {batch_start}-{batch_end} failed after {max_retries} attempts")
                     raise
     
-    print(f"✅ inserted {len(points)} items into '{collection_name}'")
+    print(f"✅ Inserted {len(points)} items into '{collection_name}'")
 
     # Build quick lookup map product_id -> payload for downstream correlation
     product_map: Dict[str, Dict[str, Any]] = {p['product_id']: p for p in payloads}
@@ -398,20 +388,20 @@ def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[s
     print(f"✅ inserted {len(points)} items into '{collection_name}'")
 
 def main():
-    print("Starting Synthetic Data Generation & Insertion...")
+    print("Starting Data Insertion from products_payload.json...")
     
     # Setup
     client = get_qdrant_client()
     
-    # Load product data (limit to 500 for Qdrant Cloud stability)
-    products_source = load_product_data("data/electronics/products_payload.json", limit=1000)
-    print(f"Loaded {len(products_source)} products")
+    # Load ALL product data (no limit - use real data only)
+    products_source = load_product_data("data/products_payload.json", limit=20000)
+    print(f"Loaded {len(products_source)} products from JSON")
 
-    # A) Products
+    # A) Products (real data, no synthetic generation)
     product_ids, product_map = insert_products(client, products_source)
 
     # B) Users (derive preferences from products)
-    user_ids, user_profile_map = insert_users(client, product_map, count=200)
+    user_ids, user_profile_map = insert_users(client, product_map, count=2000)
 
     # C) Financials (depends on Users and product prices)
     insert_financials(client, user_profile_map, product_map)
@@ -419,7 +409,7 @@ def main():
     # D) Interactions (depends on Users + Products) - correlated
     insert_interactions(client, user_profile_map, product_map)
 
-    print("\n🎉 Data generation and insertion complete.")
+    print("\n🎉 Data insertion complete.")
 
 if __name__ == "__main__":
     main()

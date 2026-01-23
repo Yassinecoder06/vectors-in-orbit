@@ -90,6 +90,18 @@ def embed_query(text: str) -> List[float]:
         raise
 
 
+def _clamp01(value: float) -> float:
+    """Clamp a float to the [0, 1] range."""
+    return max(0.0, min(1.0, value))
+
+
+def _normalize_text(value: Any) -> str:
+    """Lower-case string normalization for matching."""
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
 def get_user_context(user_id: str, client: QdrantClient) -> Dict[str, Any]:
     """
     Retrieve user profile and financial context for a given user_id.
@@ -255,9 +267,17 @@ def rerank_products(products: List[Dict[str, Any]], user_context: Dict[str, Any]
     except (TypeError, ValueError):
         logger.warning("Invalid available_balance, defaulting to 0.0")
         available_balance = 0.0
+
+    try:
+        credit_limit = float(user_context.get("credit_limit", 0.0))
+    except (TypeError, ValueError):
+        logger.warning("Invalid credit_limit, defaulting to 0.0")
+        credit_limit = 0.0
+
+    total_budget = max(0.0, available_balance + credit_limit)
     
-    preferred_categories = set(user_context.get("preferred_categories", []))
-    preferred_brands = set(user_context.get("preferred_brands", []))
+    preferred_categories = {_normalize_text(c) for c in user_context.get("preferred_categories", [])}
+    preferred_brands = {_normalize_text(b) for b in user_context.get("preferred_brands", [])}
 
     reranked = []
 
@@ -276,13 +296,17 @@ def rerank_products(products: List[Dict[str, Any]], user_context: Dict[str, Any]
             logger.warning(f"Invalid semantic_score: {product.get('semantic_score')}")
             semantic_score = 0.0
 
-        affordability_score = 0.0 if available_balance <= 0 else max(0.0, 1.0 - (price / available_balance))
-        
-        category_match = 1.0 if payload.get("category") in preferred_categories else 0.0
-        brand_match = 1.0 if payload.get("brand") in preferred_brands else 0.0
-        preference_score = max(category_match, brand_match)
+        affordability_score = 0.0 if total_budget <= 0 else _clamp01(1.0 - (price / total_budget))
 
-        final_score = (0.45 * semantic_score + 0.35 * affordability_score + 0.20 * preference_score)
+        category_match = 1.0 if _normalize_text(payload.get("category")) in preferred_categories else 0.0
+        brand_match = 1.0 if _normalize_text(payload.get("brand")) in preferred_brands else 0.0
+
+        if not preferred_categories and not preferred_brands:
+            preference_score = 1.0  # No penalty if user did not specify preferences
+        else:
+            preference_score = max(category_match, brand_match)
+
+        final_score = _clamp01(0.45 * semantic_score + 0.35 * affordability_score + 0.20 * preference_score)
 
         reranked.append(
             {
@@ -293,7 +317,8 @@ def rerank_products(products: List[Dict[str, Any]], user_context: Dict[str, Any]
             }
         )
 
-    reranked.sort(key=lambda x: x["final_score"], reverse=True)
+    # Prefer preference matches first, then final score
+    reranked.sort(key=lambda x: (x["preference_score"], x["final_score"]), reverse=True)
     logger.info("Reranking complete.")
     return reranked
 
@@ -301,10 +326,19 @@ def search_products(
     user_id: str, 
     query: str, 
     top_k: int = 5,
-    debug_mode: bool = False
+    debug_mode: bool = False,
+    override_context: Dict[str, Any] = None,
 ) -> List[Dict[str, Any]]:
     """
     Execute full search pipeline: embed query, fetch context, search semantically, rerank.
+    
+    Args:
+        user_id: User identifier for context retrieval
+        query: Natural language search query
+        top_k: Number of results to return
+        debug_mode: Enable verbose logging
+        override_context: Optional dict to override Qdrant-retrieved user context
+                          (used by Streamlit UI to pass sidebar values)
     """
     try:
         client = get_qdrant_client()
@@ -314,7 +348,13 @@ def search_products(
             inspect_sample_payload(client, PRODUCTS_COLLECTION)
 
         query_vector = embed_query(query)
-        user_context = get_user_context(user_id, client)
+        
+        # Use override context if provided, otherwise fetch from Qdrant
+        if override_context:
+            user_context = override_context
+            logger.info("Using override context from UI")
+        else:
+            user_context = get_user_context(user_id, client)
 
         try:
             available_balance = float(user_context.get("available_balance", 0.0))
