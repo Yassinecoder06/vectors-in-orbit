@@ -8,6 +8,7 @@ env/
 
 # API keys and secrets
 test_api_key.txt
+report/
 
 # Python
 __pycache__/

@@ -38,5 +38,5 @@ def compile_tex_to_pdf(tex_path: str) -> None:
 
 if __name__ == "__main__":
     # Default to pipeline_report.tex in current directory
-    tex_path = sys.argv[1] if len(sys.argv) > 1 else "pipeline_report.tex"
+    tex_path = "final_submission.tex"
     compile_tex_to_pdf(tex_path)

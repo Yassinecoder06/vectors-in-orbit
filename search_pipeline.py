@@ -8,6 +8,26 @@ from sentence_transformers import SentenceTransformer
 import torch
 from dotenv import load_dotenv
 
+# Optional pretty printing
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+    _RICH_AVAILABLE = True
+    _console = Console()
+except Exception:
+    _RICH_AVAILABLE = False
+    _console = None
+
+# Optional matplotlib for charts
+try:
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    import numpy as np
+    _MATPLOTLIB_AVAILABLE = True
+except Exception:
+    _MATPLOTLIB_AVAILABLE = False
+
 load_dotenv()
 
 # Configure logging
@@ -321,21 +341,163 @@ def search_products(
         raise
 
 
-def _print_results(results: List[Dict[str, Any]]):
-    """Pretty-print search results."""
+def _print_results(results: List[Dict[str, Any]], summary: Optional[Dict[str, Any]] = None):
+    """Visualize search results using matplotlib only."""
     if not results:
         print("No results found.")
         return
 
-    for idx, item in enumerate(results, start=1):
-        payload = item.get("payload", {})
-        print(
-            f"#{idx} | {payload.get('name', 'Unknown Product')} | "
-            f"Price: {payload.get('price', 'N/A')} | "
-            f"Brand: {payload.get('brand', 'N/A')} | "
-            f"Category: {payload.get('category', 'N/A')} | "
-            f"Final Score: {item.get('final_score', 0):.4f}"
+    if _MATPLOTLIB_AVAILABLE:
+        _visualize_results(results, summary)
+    else:
+        # Fallback plain text
+        print("Matplotlib not available. Install with: pip install matplotlib")
+        for idx, item in enumerate(results[:5], start=1):
+            p = item.get("payload", {})
+            print(
+                f"{idx}. {p.get('name','Unknown')} | Price: ${p.get('price','N/A')} | "
+                f"Brand: {p.get('brand','N/A')} | Score: {item.get('final_score',0):.3f}"
+            )
+
+
+def _visualize_results(results: List[Dict[str, Any]], summary: Optional[Dict[str, Any]] = None):
+    """Generate comprehensive matplotlib visualization with multiple panels."""
+    import os
+
+    if not _MATPLOTLIB_AVAILABLE:
+        return
+
+    try:
+        n = min(len(results), 8)  # Show up to 8 products
+        products = []
+        final_scores = []
+        semantic_scores = []
+        afford_scores = []
+        pref_scores = []
+        prices = []
+        brands = []
+        stock_status = []
+
+        for i in range(n):
+            item = results[i]
+            p = item.get("payload", {})
+            name = str(p.get("name", f"Product {i+1}"))[:45]
+            products.append(name)
+            final_scores.append(item.get("final_score", 0.0))
+            semantic_scores.append(item.get("semantic_score", 0.0))
+            afford_scores.append(item.get("affordability_score", 0.0))
+            pref_scores.append(item.get("preference_score", 0.0))
+            prices.append(float(p.get("price", 0.0)))
+            brands.append(str(p.get("brand", "Unknown")))
+            stock_status.append("✅ In Stock" if p.get("in_stock") else "❌ Out of Stock")
+
+        # Create comprehensive figure
+        fig = plt.figure(figsize=(18, 12))
+        gs = fig.add_gridspec(3, 3, hspace=0.35, wspace=0.3)
+
+        # Main title
+        query_text = summary.get("query", "Recommendations") if summary else "Recommendations"
+        fig.suptitle(
+            f"Fin-e Trip: {query_text}",
+            fontsize=18,
+            fontweight="bold",
+            color="#1F77B4",
         )
+
+        # Panel 1: Score breakdown (stacked bar)
+        ax1 = fig.add_subplot(gs[0, :2])
+        x_pos = np.arange(n)
+        width = 0.7
+
+        p1 = ax1.bar(x_pos, semantic_scores, width, label="Semantic (45%)", color="#FFB347", alpha=0.9)
+        p2 = ax1.bar(
+            x_pos, afford_scores, width, bottom=semantic_scores, label="Affordability (35%)", color="#90EE90", alpha=0.9
+        )
+        pref_bottom = [s + a for s, a in zip(semantic_scores, afford_scores)]
+        p3 = ax1.bar(
+            x_pos, pref_scores, width, bottom=pref_bottom, label="Preference (20%)", color="#87CEEB", alpha=0.9
+        )
+
+        ax1.set_ylabel("Score", fontweight="bold", fontsize=11)
+        ax1.set_title("Score Composition per Product", fontweight="bold", fontsize=12)
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels([f"#{i+1}" for i in range(n)])
+        ax1.legend(loc="upper right", fontsize=10)
+        ax1.grid(axis="y", alpha=0.3, linestyle="--")
+        ax1.set_ylim(0, 1.2)
+
+        # Panel 2: Budget info (text box)
+        ax_budget = fig.add_subplot(gs[0, 2])
+        ax_budget.axis("off")
+        if summary:
+            bal = summary.get("available_balance", 0)
+            cred = summary.get("credit_limit", 0)
+            total = bal + cred
+            budget_text = f"💰 Budget Breakdown\n\nBalance: ${bal:,.0f}\nCredit: ${cred:,.0f}\nMax: ${total:,.0f}"
+            ax_budget.text(
+                0.1, 0.5, budget_text, fontsize=11, verticalalignment="center",
+                bbox=dict(boxstyle="round", facecolor="#E8F4F8", alpha=0.8, pad=1),
+                family="monospace",
+            )
+
+        # Panel 3: Final scores (horizontal bar)
+        ax2 = fig.add_subplot(gs[1, :])
+        colors_final = ["#2CA02C" if f >= 0.7 else "#FF7F0E" if f >= 0.6 else "#D62728" for f in final_scores]
+        bars = ax2.barh(range(n), final_scores, color=colors_final, alpha=0.85, height=0.6)
+
+        # Add price and brand labels
+        for i, (bar, price, brand) in enumerate(zip(bars, prices, brands)):
+            ax2.text(bar.get_width() + 0.02, bar.get_y() + bar.get_height() / 2,
+                f"  ${price:,.0f} ({brand})", va="center", fontsize=10, fontweight="bold")
+
+        ax2.set_yticks(range(n))
+        ax2.set_yticklabels([f"#{i+1} {products[i][:50]}" for i in range(n)], fontsize=10)
+        ax2.set_xlabel("Final Score", fontweight="bold", fontsize=11)
+        ax2.set_title("Product Rankings & Pricing", fontweight="bold", fontsize=12)
+        ax2.set_xlim(0, 1.0)
+        ax2.grid(axis="x", alpha=0.3, linestyle="--")
+
+        # Panel 4: Affordability scores
+        ax3 = fig.add_subplot(gs[2, 0])
+        afford_colors = ["#2CA02C" if a > 0.8 else "#FF7F0E" if a > 0.5 else "#D62728" for a in afford_scores]
+        ax3.bar(range(n), afford_scores, color=afford_colors, alpha=0.85)
+        ax3.set_ylabel("Score", fontweight="bold", fontsize=10)
+        ax3.set_title("Affordability Scores", fontweight="bold", fontsize=11)
+        ax3.set_xticks(range(n))
+        ax3.set_xticklabels([f"#{i+1}" for i in range(n)], fontsize=9)
+        ax3.set_ylim(0, 1.05)
+        ax3.grid(axis="y", alpha=0.3, linestyle="--")
+
+        # Panel 5: Price distribution
+        ax4 = fig.add_subplot(gs[2, 1])
+        price_colors = ["#1f77b4" if p < 1000 else "#ff7f0e" if p < 3000 else "#d62728" for p in prices]
+        ax4.bar(range(n), prices, color=price_colors, alpha=0.85)
+        ax4.set_ylabel("Price ($)", fontweight="bold", fontsize=10)
+        ax4.set_title("Product Prices", fontweight="bold", fontsize=11)
+        ax4.set_xticks(range(n))
+        ax4.set_xticklabels([f"#{i+1}" for i in range(n)], fontsize=9)
+        ax4.grid(axis="y", alpha=0.3, linestyle="--")
+
+        # Panel 6: Stock status (legend-like)
+        ax5 = fig.add_subplot(gs[2, 2])
+        ax5.axis("off")
+        stock_text = "📦 Stock Status\n\n"
+        for i, status in enumerate(stock_status[:n]):
+            stock_text += f"#{i+1}: {status}\n"
+        ax5.text(
+            0.05, 0.95, stock_text, fontsize=9, verticalalignment="top", family="monospace",
+            bbox=dict(boxstyle="round", facecolor="#FFF8DC", alpha=0.8, pad=0.8),
+        )
+
+        # Save and display
+        output_path = os.path.join(os.getcwd(), "fin_trip_recommendations.png")
+        plt.savefig(output_path, dpi=120, bbox_inches="tight", facecolor="white")
+        print(f"\n✅ Visualization saved: {output_path}")
+        print(f"📊 Chart includes: score composition, rankings, affordability, pricing, and stock status.\n")
+        plt.show()
+
+    except Exception as e:
+        print(f"⚠️ Visualization error: {e}")
 
 
 if __name__ == "__main__":
@@ -364,7 +526,7 @@ if __name__ == "__main__":
                 "location": "San Francisco",
                 "risk_tolerance": "Medium",
                 "preferred_categories": ["Computers", "Smartphones", "Accessories"],
-                "preferred_brands": ["Samsung", "OnePlus", "Apple"],
+                "preferred_brands": ["Samsung", "MI", "Apple"],
             }
         )
         
@@ -387,7 +549,12 @@ if __name__ == "__main__":
         logger.info(f"Test fixtures created for user_id={sample_user_id}")
         
         results = search_products(sample_user_id, sample_query, top_k=5, debug_mode=True)
-        _print_results(results)
+        summary = {
+            "query": sample_query,
+            "available_balance": test_user_financial.payload.get("available_balance"),
+            "credit_limit": test_user_financial.payload.get("credit_limit"),
+        }
+        _print_results(results, summary)
         
         if not results:
             logger.warning("No results found. Check:")

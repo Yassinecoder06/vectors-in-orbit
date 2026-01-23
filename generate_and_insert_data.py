@@ -404,14 +404,14 @@ def main():
     client = get_qdrant_client()
     
     # Load product data (limit to 500 for Qdrant Cloud stability)
-    products_source = load_product_data("data/products_payload.json", limit=3000)
+    products_source = load_product_data("data/electronics/products_payload.json", limit=1000)
     print(f"Loaded {len(products_source)} products")
 
     # A) Products
     product_ids, product_map = insert_products(client, products_source)
 
     # B) Users (derive preferences from products)
-    user_ids, user_profile_map = insert_users(client, product_map, count=1000)
+    user_ids, user_profile_map = insert_users(client, product_map, count=200)
 
     # C) Financials (depends on Users and product prices)
     insert_financials(client, user_profile_map, product_map)
