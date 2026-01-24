@@ -1,4 +1,4 @@
-"""
+﻿"""
 Context-Aware FinCommerce Engine - Streamlit Demo UI
 
 A hackathon demo showcasing personalized product recommendations
@@ -56,7 +56,7 @@ def on_add_to_cart(product: Dict[str, Any], query: str = ""):
             interaction_type="add_to_cart",
             query=query
         )
-        st.toast("✅ Added to cart! (Interaction logged)", icon="🛒")
+        st.toast("âœ… Added to cart! (Interaction logged)", icon="ðŸ›’")
     except Exception as e:
         st.warning(f"Failed to log add to cart: {e}")
 
@@ -71,7 +71,7 @@ def on_purchase(product: Dict[str, Any], query: str = ""):
             interaction_type="purchase",
             query=query
         )
-        st.toast("✅ Purchase logged! Thank you!", icon="💳")
+        st.toast("âœ… Purchase logged! Thank you!", icon="ðŸ’³")
     except Exception as e:
         st.warning(f"Failed to log purchase: {e}")
 
@@ -81,7 +81,7 @@ def on_purchase(product: Dict[str, Any], query: str = ""):
 
 st.set_page_config(
     page_title="FinCommerce Engine",
-    page_icon="🛒",
+    page_icon="ðŸ›’",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -231,7 +231,7 @@ def build_user_context() -> Dict[str, Any]:
 
 def render_sidebar():
     """Render sidebar controls for user context configuration."""
-    st.sidebar.title("🎛️ User Profile")
+    st.sidebar.title("ðŸŽ›ï¸ User Profile")
     st.sidebar.markdown("---")
     
     # Load options from dataset
@@ -239,7 +239,7 @@ def render_sidebar():
     
     # User persona selector
     persona = st.sidebar.selectbox(
-        "👤 User Type",
+        "ðŸ‘¤ User Type",
         options=list(USER_PERSONAS.keys()),
         index=list(USER_PERSONAS.keys()).index(st.session_state.user_persona),
         help="Select a preset user profile or customize below",
@@ -253,7 +253,7 @@ def render_sidebar():
             st.session_state.available_balance = float(preset["balance"])
             st.session_state.credit_limit = float(preset["credit"])
     
-    st.sidebar.markdown("### 💰 Financial Context")
+    st.sidebar.markdown("### ðŸ’° Financial Context")
     
     # Available balance slider
     st.session_state.available_balance = st.sidebar.slider(
@@ -279,7 +279,7 @@ def render_sidebar():
     total_budget = st.session_state.available_balance + st.session_state.credit_limit
     st.sidebar.metric("Total Budget", f"${total_budget:,.0f}")
     
-    st.sidebar.markdown("### 🎯 Preferences")
+    st.sidebar.markdown("### ðŸŽ¯ Preferences")
     
     # Preferred brands multiselect
     st.session_state.preferred_brands = st.sidebar.multiselect(
@@ -298,7 +298,7 @@ def render_sidebar():
     )
     
     st.sidebar.markdown("---")
-    st.sidebar.caption("🔬 Powered by Qdrant + SentenceTransformers")
+    st.sidebar.caption("ðŸ”¬ Powered by Qdrant + SentenceTransformers")
 
 
 def render_product_card(product: Dict[str, Any], rank: int):
@@ -334,11 +334,11 @@ def render_product_card(product: Dict[str, Any], rank: int):
     
     # Determine score color
     if final_score >= 0.7:
-        score_color = "🟢"
+        score_color = "ðŸŸ¢"
     elif final_score >= 0.5:
-        score_color = "🟡"
+        score_color = "ðŸŸ¡"
     else:
-        score_color = "🔴"
+        score_color = "ðŸ”´"
     
     # Card container
     with st.container():
@@ -348,7 +348,7 @@ def render_product_card(product: Dict[str, Any], rank: int):
             if image_url:
                 st.image(image_url, width=220)
             st.markdown(f"### #{rank} {name}")
-            st.caption(f"**{brand}** · {category}")
+            st.caption(f"**{brand}** Â· {category}")
         
         with col2:
             st.metric("Price", f"${price:,.2f}")
@@ -358,274 +358,3 @@ def render_product_card(product: Dict[str, Any], rank: int):
             st.metric("Match Score", f"{final_score:.0%}")
             st.caption(f"{score_color} {'In Stock' if in_stock else 'Out of Stock'}")
         
-        # Description
-        if description:
-            st.markdown("**Description**")
-            st.write(f"{description[:100]}{'...' if len(description) > 100 else ''}")
-        
-        # Display explanations prominently
-        if explanations:
-            st.markdown("**Why this product?**")
-            for explanation in explanations[:3]:  # Show top 3 explanations
-                st.caption(f"• {explanation}")
-        
-        # Expandable explanation section
-        with st.expander("🔍 See detailed breakdown"):
-            if description:
-                st.markdown("**Full Description**")
-                st.write(description)
-                st.markdown("---")
-            
-            # Show all explanations
-            if explanations:
-                st.markdown("**All Reasons:**")
-                for i, exp in enumerate(explanations, 1):
-                    st.write(f"{i}. {exp}")
-                st.markdown("---")
-            
-            render_explanation(
-                semantic_score,
-                affordability_score,
-                preference_score,
-                collaborative_score,
-                popularity_score,
-                payload,
-            )
-        
-        # Interaction buttons
-        col_btn1, col_btn2, col_btn3 = st.columns(3)
-        
-        with col_btn1:
-            if st.button("👁️ View Details", key=f"view_{rank}_{name[:10]}", use_container_width=True):
-                on_product_click(product, st.session_state.get("search_query", ""))
-                st.info(f"Viewing details for {name}")
-        
-        with col_btn2:
-            if st.button("🛒 Add to Cart", key=f"cart_{rank}_{name[:10]}", use_container_width=True):
-                on_add_to_cart(product, st.session_state.get("search_query", ""))
-        
-        with col_btn3:
-            if st.button("💳 Buy Now", key=f"buy_{rank}_{name[:10]}", use_container_width=True):
-                on_purchase(product, st.session_state.get("search_query", ""))
-        
-        st.markdown("---")
-
-
-def render_explanation(
-    semantic_score: float,
-    affordability_score: float,
-    preference_score: float,
-    collaborative_score: float,
-    popularity_score: float,
-    payload: Dict[str, Any],
-):
-    """Render detailed explanation for product recommendation."""
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        st.markdown("**🎯 Semantic Match**")
-        st.progress(min(semantic_score, 1.0))
-        st.caption(f"{semantic_score:.0%} query relevance")
-        if semantic_score >= 0.7:
-            st.success("Strong match to your search!")
-        elif semantic_score >= 0.4:
-            st.info("Moderate relevance")
-        else:
-            st.warning("Weak match")
-    
-    with col2:
-        st.markdown("**💰 Affordability**")
-        st.progress(min(affordability_score, 1.0))
-        st.caption(f"{affordability_score:.0%} budget fit")
-        
-        price = payload.get("price", 0)
-        total_budget = st.session_state.available_balance + st.session_state.credit_limit
-        
-        if affordability_score >= 0.8:
-            st.success(f"Well within budget (${price:,.0f} / ${total_budget:,.0f})")
-        elif affordability_score >= 0.5:
-            st.info(f"Affordable (${price:,.0f} / ${total_budget:,.0f})")
-        else:
-            st.warning(f"Stretches budget (${price:,.0f} / ${total_budget:,.0f})")
-    
-    with col3:
-        st.markdown("**❤️ Preference Match**")
-        st.progress(min(preference_score, 1.0))
-        st.caption(f"{preference_score:.0%} preference alignment")
-        
-        brand = payload.get("brand", "")
-        categories = payload.get("categories", [])
-        if not isinstance(categories, list):
-            categories = [categories] if categories else []
-        
-        brand_match = brand.lower() in [b.lower() for b in st.session_state.preferred_brands]
-        preferred_categories = [c.lower() for c in st.session_state.preferred_categories]
-        category_match = any(str(c).lower() in preferred_categories for c in categories)
-        
-        if brand_match and category_match:
-            matched = next((c for c in categories if str(c).lower() in preferred_categories), None)
-            if matched:
-                st.success(f"Matches brand ({brand}) & category ({matched})")
-            else:
-                st.success(f"Matches brand ({brand}) & category")
-        elif brand_match:
-            st.success(f"Matches preferred brand: {brand}")
-        elif category_match:
-            matched = next((c for c in categories if str(c).lower() in preferred_categories), None)
-            if matched:
-                st.success(f"Matches preferred category: {matched}")
-            else:
-                st.success("Matches preferred category")
-        elif not st.session_state.preferred_brands and not st.session_state.preferred_categories:
-            st.info("No preferences set - all products considered equally")
-        else:
-            st.warning("No preference match")
-    
-    with col4:
-        st.markdown("**🤝 Collaborative**")
-        st.progress(min(collaborative_score, 1.0))
-        st.caption(f"{collaborative_score:.0%}")
-        if collaborative_score > 0.5:
-            st.success("Similar users liked this")
-        elif collaborative_score > 0.1:
-            st.info("Some user overlap")
-        else:
-            st.caption("No collaborative signal")
-    
-    with col5:
-        st.markdown("**🔥 Popularity**")
-        st.progress(min(popularity_score, 1.0))
-        st.caption(f"{popularity_score:.0%}")
-        if popularity_score > 0.7:
-            st.success("Trending now!")
-        elif popularity_score > 0.4:
-            st.info("Popular choice")
-        elif popularity_score > 0.1:
-            st.caption("Getting attention")
-        else:
-            st.caption("Niche product")
-
-
-def perform_search(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-    """Execute search with current user context."""
-    if not query.strip():
-        return []
-    
-    user_context = build_user_context()
-    
-    try:
-        results = search_products(
-            user_id=user_context["user_id"],
-            query=query,
-            top_k=top_k,
-            debug_mode=False,
-            override_context=user_context,  # Pass UI context to backend
-        )
-        return results
-    except Exception as e:
-        st.error(f"Search failed: {str(e)}")
-        return []
-
-
-def render_main_area():
-    """Render main search interface and results."""
-    st.title("🛒 Context-Aware FinCommerce Engine")
-    st.markdown(
-        "Personalized product recommendations powered by **semantic search**, "
-        "**affordability scoring**, and **preference matching**."
-    )
-    
-    # Search input section
-    col1, col2 = st.columns([4, 1])
-    
-    with col1:
-        query = st.text_input(
-            "🔍 What are you looking for?",
-            value=st.session_state.search_query,
-            placeholder="e.g., 'comfortable running shoes for marathon training'",
-            label_visibility="collapsed",
-        )
-    
-    with col2:
-        search_clicked = st.button("Search", type="primary", use_container_width=True)
-    
-    # Number of results selector
-    top_k = st.slider("Number of recommendations", 3, 10, 5, key="top_k_slider")
-    
-    # Execute search
-    if search_clicked and query.strip():
-        st.session_state.search_query = query
-        with st.spinner("🔍 Searching across products..."):
-            st.session_state.search_results = perform_search(query, top_k)
-            st.session_state.has_searched = True
-    
-    st.markdown("---")
-    
-    # Display results
-    if st.session_state.has_searched:
-        results = st.session_state.search_results
-        
-        if results:
-            st.markdown(f"### 🎁 Top {len(results)} Recommendations")
-            
-            # Summary metrics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                avg_score = sum(r.get("final_score", 0) for r in results) / len(results)
-                st.metric("Avg Match", f"{avg_score:.0%}")
-            with col2:
-                avg_price = sum(r.get("payload", {}).get("price", 0) for r in results) / len(results)
-                st.metric("Avg Price", f"${avg_price:,.0f}")
-            with col3:
-                in_budget = sum(
-                    1 for r in results 
-                    if r.get("affordability_score", 0) >= 0.5
-                )
-                st.metric("In Budget", f"{in_budget}/{len(results)}")
-            with col4:
-                pref_match = sum(
-                    1 for r in results 
-                    if r.get("preference_score", 0) >= 1.0
-                )
-                st.metric("Pref Match", f"{pref_match}/{len(results)}")
-            
-            st.markdown("---")
-            
-            # Render product cards
-            for idx, product in enumerate(results, start=1):
-                render_product_card(product, idx)
-        else:
-            st.info(
-                "😕 No products found matching your criteria.\n\n"
-                "Try:\n"
-                "- Broadening your search terms\n"
-                "- Increasing your budget\n"
-                "- Removing preference filters"
-            )
-    else:
-        # Welcome state
-        st.markdown(
-            """
-            ### 👋 Welcome!
-            
-            Enter a search query above to discover personalized product recommendations.
-            
-            **How it works:**
-            1. 🔍 **Semantic Search** - We understand your intent, not just keywords
-            2. 💰 **Affordability Scoring** - Products ranked by your budget
-            3. ❤️ **Preference Matching** - Your favorite brands & categories prioritized
-            
-            Configure your profile in the sidebar to personalize results!
-            """
-        )
-
-
-def main():
-    """Main application entry point."""
-    init_session_state()
-    render_sidebar()
-    render_main_area()
-
-
-if __name__ == "__main__":
-    main()

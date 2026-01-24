@@ -368,18 +368,20 @@ def semantic_product_search(
 def rerank_products(
     products: List[Dict[str, Any]], 
     user_context: Dict[str, Any],
-    client: QdrantClient
+    client: QdrantClient,
+    debug_mode: bool = False
 ) -> List[Dict[str, Any]]:
     """
-    Rerank products by affordability, preferences, and collaborative filtering.
+    Rerank products with popularity-aware scoring.
     
     final_score = 
-      0.35 * semantic_score + 
-      0.30 * affordability_score + 
+      0.30 * semantic_score + 
+      0.25 * affordability_score + 
       0.15 * preference_score + 
-      0.20 * collaborative_score
+      0.20 * collaborative_score +
+      0.10 * popularity_score
     """
-    logger.info("Reranking %d products...", len(products))
+    logger.info("Reranking %d products with popularity awareness...", len(products))
 
     try:
         available_balance = float(user_context.get("available_balance", 0.0))
@@ -398,6 +400,15 @@ def rerank_products(
     # Fetch Collaborative Scores
     product_ids = [str(p.get("id")) for p in products]
     collab_scores = get_collaborative_scores(client, user_id, product_ids)
+    
+    # Fetch Popularity Scores
+    from interaction_logger import get_top_interacted_products
+    popularity_data = get_top_interacted_products(timeframe_hours=24, top_k=100, debug=debug_mode)
+    popularity_map = {p["product_id"]: p["weighted_popularity_score"] for p in popularity_data}
+    
+    if debug_mode and popularity_data:
+        logger.info(f"📊 Loaded popularity data for {len(popularity_data)} products")
+        logger.info(f"   Top popular: {popularity_data[0]['product_id']} (score: {popularity_data[0]['weighted_popularity_score']:.3f})")
 
     reranked = []
 
@@ -441,35 +452,71 @@ def rerank_products(
 
         # Collaborative Score
         collaborative_score = collab_scores.get(pid, 0.0)
+        
+        # Popularity Score
+        popularity_score = popularity_map.get(pid, 0.0)
 
-        # Final Score
+        # Final Score with popularity
         final_score = (
-            0.35 * semantic_score +
-            0.30 * affordability_score +
+            0.30 * semantic_score +
+            0.25 * affordability_score +
             0.15 * preference_score +
-            0.20 * collaborative_score
+            0.20 * collaborative_score +
+            0.10 * popularity_score
         )
         final_score = _clamp01(final_score)
 
-        # Explainability Reason
-        reasons = []
-        if affordability_score > 0.8:
-            reasons.append("Matches your budget comfortably")
-        if collaborative_score > 0.5:
-            reasons.append("Users with similar behavior purchased this")
-        elif collaborative_score > 0.1:
-            reasons.append("Trending among similar users")
+        # Enhanced Explainability with multiple reasons
+        explanations = []
         
-        if category_match:
-            matched = next((c for c in categories if _normalize_text(c) in preferred_categories), None)
-            if matched:
-                reasons.append(f"Matches your category preference ({matched})")
+        # Popularity explanations (always show if non-zero)
+        if popularity_score > 0.7:
+            explanations.append("🔥 Trending: Very popular in last 24 hours")
+        elif popularity_score > 0.4:
+            explanations.append("📈 Popular among users recently")
+        elif popularity_score > 0.1:
+            explanations.append("👥 Other users are viewing this")
+        
+        # Affordability explanations
+        if affordability_score > 0.8:
+            explanations.append("💰 Well within your budget")
+        elif affordability_score > 0.5:
+            explanations.append("💵 Affordable for your budget")
+        elif affordability_score > 0.2:
+            explanations.append("⚠️ Stretches your budget")
+        
+        # Collaborative explanations
+        if collaborative_score > 0.5:
+            explanations.append("🤝 Users with similar behavior purchased this")
+        elif collaborative_score > 0.1:
+            explanations.append("👤 Similar users interacted with this")
+        
+        # Preference explanations
+        if category_match and brand_match:
+            matched_cat = next((c for c in categories if _normalize_text(c) in preferred_categories), None)
+            if matched_cat:
+                explanations.append(f"❤️ Matches your brand ({payload.get('brand')}) & category ({matched_cat})")
             else:
-                reasons.append("Matches your category preference")
-        if brand_match:
-            reasons.append(f"Matches your brand preference ({payload.get('brand')})")
-            
-        reason_text = reasons[0] if reasons else "Based on semantic relevance"
+                explanations.append(f"❤️ Matches your brand ({payload.get('brand')}) & category preference")
+        elif brand_match:
+            explanations.append(f"⭐ Matches your preferred brand: {payload.get('brand')}")
+        elif category_match:
+            matched_cat = next((c for c in categories if _normalize_text(c) in preferred_categories), None)
+            if matched_cat:
+                explanations.append(f"🎯 Matches your category preference: {matched_cat}")
+        
+        # Semantic relevance (always include)
+        if semantic_score > 0.7:
+            explanations.append("🎯 Strong match to your search query")
+        elif semantic_score > 0.4:
+            explanations.append("📝 Relevant to your search")
+        
+        # Fallback if no explanations
+        if not explanations:
+            explanations.append("Based on semantic relevance to your query")
+        
+        # Primary reason (for backward compatibility)
+        reason_text = explanations[0]
 
         reranked.append(
             {
@@ -477,13 +524,28 @@ def rerank_products(
                 "affordability_score": affordability_score,
                 "preference_score": preference_score,
                 "collaborative_score": collaborative_score,
+                "popularity_score": popularity_score,
                 "final_score": final_score,
                 "reason": reason_text,
+                "explanations": explanations,
             }
         )
-
+    
     # Sort by final score
     reranked.sort(key=lambda x: x["final_score"], reverse=True)
+    
+    if debug_mode:
+        logger.info("📊 Reranking complete - Score breakdown:")
+        for i, p in enumerate(reranked[:3], 1):
+            logger.info(
+                f"  #{i}: final={p['final_score']:.3f} "
+                f"(sem={p.get('semantic_score', 0):.2f}, "
+                f"aff={p['affordability_score']:.2f}, "
+                f"pref={p['preference_score']:.2f}, "
+                f"collab={p['collaborative_score']:.2f}, "
+                f"pop={p['popularity_score']:.2f})"
+            )
+    
     logger.info("Reranking complete.")
     return reranked
 
@@ -542,7 +604,7 @@ def search_products(
             logger.warning("No products found")
             return []
         
-        reranked = rerank_products(products, user_context, client)
+        reranked = rerank_products(products, user_context, client, debug_mode=debug_mode)
         return reranked[:top_k]
         
     except Exception as exc:
