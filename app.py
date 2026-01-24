@@ -66,10 +66,17 @@ def load_brand_category_options() -> Tuple[List[str], List[str]]:
         if b and not has_digit(b) and len(b) > 1
     })
     
-    categories = sorted({
-        c for c in ((p.get("category") or "").strip() for p in products)
-        if c and not has_digit(c) and len(c) > 1
-    })
+    categories = set()
+    for p in products:
+        cats = p.get("categories", [])
+        if not isinstance(cats, list):
+            cats = [cats] if cats else []
+        for c in cats:
+            c = str(c).strip()
+            if c and not has_digit(c) and len(c) > 1:
+                categories.add(c)
+
+    categories = sorted(categories)
     
     return brands, categories
 
@@ -96,7 +103,7 @@ def _load_brand_category_options_from_qdrant() -> Tuple[List[str], List[str]]:
         while True:
             points, next_page = client.scroll(
                 collection_name=PRODUCTS_COLLECTION,
-                limit=250,
+                limit=4000,
                 with_payload=True,
                 with_vectors=False,
                 offset=next_page,
@@ -108,12 +115,16 @@ def _load_brand_category_options_from_qdrant() -> Tuple[List[str], List[str]]:
             for p in points:
                 payload = p.payload or {}
                 brand = (payload.get("brand") or "").strip()
-                category = (payload.get("category") or "").strip()
+                cats = payload.get("categories", [])
+                if not isinstance(cats, list):
+                    cats = [cats] if cats else []
 
                 if brand and not has_digit(brand) and len(brand) > 1:
                     brands.add(brand)
-                if category and not has_digit(category) and len(category) > 1:
-                    categories.add(category)
+                for category in cats:
+                    category = str(category).strip()
+                    if category and not has_digit(category) and len(category) > 1:
+                        categories.add(category)
 
             if not next_page:
                 break
@@ -237,9 +248,13 @@ def render_product_card(product: Dict[str, Any], rank: int):
     description = payload.get("description", "No description available")
     price = payload.get("price", 0.0)
     brand = payload.get("brand", "Unknown")
-    category = payload.get("category", "General")
+    categories = payload.get("categories", ["General"])
+    if not isinstance(categories, list):
+        categories = [categories] if categories else ["General"]
+    category = categories[0] if categories else "General"
     monthly_installment = payload.get("monthly_installment", price / 12)
     in_stock = payload.get("in_stock", True)
+    image_url = (payload.get("image_url") or "").strip()
     
     # Extract scores
     final_score = product.get("final_score", 0.0)
@@ -260,6 +275,8 @@ def render_product_card(product: Dict[str, Any], rank: int):
         col1, col2, col3 = st.columns([3, 1, 1])
         
         with col1:
+            if image_url:
+                st.image(image_url, width=220)
             st.markdown(f"### #{rank} {name}")
             st.caption(f"**{brand}** · {category}")
         
@@ -274,7 +291,7 @@ def render_product_card(product: Dict[str, Any], rank: int):
         # Description
         if description:
             st.markdown("**Description**")
-            st.write(f"{description[:240]}{'...' if len(description) > 240 else ''}")
+            st.write(f"{description[:100]}{'...' if len(description) > 100 else ''}")
         
         # Expandable explanation section
         with st.expander("🔍 Why this product?"):
@@ -288,6 +305,22 @@ def render_product_card(product: Dict[str, Any], rank: int):
                 preference_score,
                 payload,
             )
+            
+        # TODO: Hook for Interaction Logging
+        # ---------------------------------------------------------
+        # Add buttons for "Add to Cart" or "Buy Now" here.
+        # When clicked, invoke interaction_logger.log_interaction()
+        # Example:
+        # if st.button("� Add to Cart", key=f"add_{rank}"):
+        #     from interaction_logger import log_interaction
+        #     log_interaction(
+        #         user_id=st.session_state.get("user_persona", "guest"),
+        #         product_payload=product.get("payload", {}),
+        #         interaction_type="add_to_cart",
+        #         query=st.session_state.get("search_query", "")
+        #     )
+        #     st.toast("Added to cart! (Interaction Logged)")
+        # ---------------------------------------------------------
         
         st.markdown("---")
 
@@ -333,17 +366,28 @@ def render_explanation(
         st.caption(f"{preference_score:.0%} preference alignment")
         
         brand = payload.get("brand", "")
-        category = payload.get("category", "")
+        categories = payload.get("categories", [])
+        if not isinstance(categories, list):
+            categories = [categories] if categories else []
         
         brand_match = brand.lower() in [b.lower() for b in st.session_state.preferred_brands]
-        category_match = category.lower() in [c.lower() for c in st.session_state.preferred_categories]
+        preferred_categories = [c.lower() for c in st.session_state.preferred_categories]
+        category_match = any(str(c).lower() in preferred_categories for c in categories)
         
         if brand_match and category_match:
-            st.success(f"Matches brand ({brand}) & category ({category})")
+            matched = next((c for c in categories if str(c).lower() in preferred_categories), None)
+            if matched:
+                st.success(f"Matches brand ({brand}) & category ({matched})")
+            else:
+                st.success(f"Matches brand ({brand}) & category")
         elif brand_match:
             st.success(f"Matches preferred brand: {brand}")
         elif category_match:
-            st.success(f"Matches preferred category: {category}")
+            matched = next((c for c in categories if str(c).lower() in preferred_categories), None)
+            if matched:
+                st.success(f"Matches preferred category: {matched}")
+            else:
+                st.success("Matches preferred category")
         elif not st.session_state.preferred_brands and not st.session_state.preferred_categories:
             st.info("No preferences set - all products considered equally")
         else:

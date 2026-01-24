@@ -17,7 +17,7 @@ COLLECTION_CONFIGS = {
             "name": models.PayloadSchemaType.KEYWORD,
             "description": models.PayloadSchemaType.KEYWORD,
             "price": models.PayloadSchemaType.FLOAT,
-            "category": models.PayloadSchemaType.KEYWORD,
+            "categories": models.PayloadSchemaType.KEYWORD,
             "brand": models.PayloadSchemaType.KEYWORD,
             "in_stock": models.PayloadSchemaType.BOOL,
             "image_url": models.PayloadSchemaType.KEYWORD,
@@ -56,9 +56,13 @@ COLLECTION_CONFIGS = {
         "distance": models.Distance.COSINE,
         "payload_indexes": {
             "user_id": models.PayloadSchemaType.KEYWORD,
-            "query": models.PayloadSchemaType.KEYWORD,
-            "clicked_product_id": models.PayloadSchemaType.KEYWORD,
-            "purchased": models.PayloadSchemaType.BOOL,
+            "product_id": models.PayloadSchemaType.KEYWORD,
+            "interaction_type": models.PayloadSchemaType.KEYWORD,
+            "timestamp": models.PayloadSchemaType.INTEGER,
+            "category": models.PayloadSchemaType.KEYWORD,
+            "brand": models.PayloadSchemaType.KEYWORD,
+            "price": models.PayloadSchemaType.FLOAT,
+            "weight": models.PayloadSchemaType.FLOAT,
         }
     }
 }

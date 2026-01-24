@@ -85,26 +85,27 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
     for src in products_source:
         product_id = src.get("product_id", str(uuid.uuid4()))
         name = src.get("name", "Unknown Product")
-        category = src.get("category", "General")
+        categories = src.get("categories", ["General"])
+        if not isinstance(categories, list) or not categories:
+            categories = [str(categories)] if categories else ["General"]
+        primary_category = categories[0]
         brand = src.get("brand", "Unknown")
         price = float(src.get("price", 0.0))
         in_stock = src.get("in_stock", True)
         region = src.get("region", "Unknown")
         image_url = src.get("image_url", f"https://example.com/images/{product_id}.jpg")
         monthly_installment = src.get("monthly_installment", round(price / 12, 2))
-
-        # Create description from product attributes
-        description = f"{brand} {category} available in {region}"
+        description = src.get("description", "No Available Description")
 
         # Create rich text representation for embedding
-        text_to_embed = f"{name} {description} {category} {brand} {region}"
+        text_to_embed = f"{name} {description} {' '.join(categories)} {brand} {region}"
         texts_to_embed.append(text_to_embed)
 
         payload = {
             "product_id": product_id,
             "name": name,
             "description": description,
-            "category": category,
+            "categories": categories,
             "brand": brand,
             "price": price,
             "monthly_installment": monthly_installment,
@@ -171,7 +172,14 @@ def insert_users(client: QdrantClient, product_map: Dict[str, Dict[str, Any]], c
     print(f"Processing {collection_name}...")
 
     # Precompute available categories/brands from product_map
-    categories = [p.get('category', 'General') for p in product_map.values()] if product_map else []
+    categories = []
+    if product_map:
+        for p in product_map.values():
+            cats = p.get('categories', [])
+            if isinstance(cats, list):
+                categories.extend(cats)
+            elif cats:
+                categories.append(str(cats))
     brands = [p.get('brand', '') for p in product_map.values()] if product_map else []
 
     for _ in range(count):
@@ -246,7 +254,12 @@ def insert_financials(client: QdrantClient, user_profile_map: Dict[str, Dict[str
     for uid, profile in user_profile_map.items():
         # Derive financials from the user's preferred categories: compute avg price
         preferred = profile.get('preferred_categories', [])
-        prices = [p['price'] for p in product_map.values() if p.get('category') in preferred and isinstance(p.get('price'), (int, float))]
+        prices = [
+            p['price']
+            for p in product_map.values()
+            if isinstance(p.get('price'), (int, float))
+            and any(cat in preferred for cat in (p.get('categories') or []))
+        ]
 
         if prices:
             avg_price = sum(prices) / len(prices)
@@ -299,7 +312,7 @@ def insert_financials(client: QdrantClient, user_profile_map: Dict[str, Dict[str
     print(f"✅ inserted {len(points)} items into '{collection_name}'")
 
 def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[str, Any]], product_map: Dict[str, Dict[str, Any]]):
-    """Generate interaction history."""
+    """Generate interaction history aligned to interaction_memory schema."""
     collection_name = "interaction_memory"
     vector_size = 384
     points = []
@@ -317,8 +330,18 @@ def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[s
     category_index: Dict[str, List[str]] = {}
     all_product_ids = list(product_map.keys())
     for pid, pdata in product_map.items():
-        cat = pdata.get('category', 'General')
-        category_index.setdefault(cat, []).append(pid)
+        cats = pdata.get('categories', ['General'])
+        if not isinstance(cats, list) or not cats:
+            cats = [str(cats)] if cats else ["General"]
+        for cat in cats:
+            category_index.setdefault(cat, []).append(pid)
+
+    interaction_weights = {
+        "view": 0.1,
+        "click": 0.3,
+        "add_to_cart": 0.6,
+        "purchase": 1.0,
+    }
 
     for uid, profile in user_profile_map.items():
         # 2-3 interactions per user
@@ -327,7 +350,11 @@ def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[s
 
         for _ in range(num_interactions):
             interaction_uuid = str(uuid.uuid4())
-            purchased = random.choice([True, False])
+            interaction_type = random.choices(
+                population=["view", "click", "add_to_cart", "purchase"],
+                weights=[0.4, 0.3, 0.2, 0.1],
+                k=1
+            )[0]
             query = fake.sentence(nb_words=4)
 
             # Prefer products from user's preferred categories when available
@@ -338,17 +365,31 @@ def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[s
                 candidate_ids = all_product_ids
 
             pid = random.choice(candidate_ids)
+            product = product_map.get(pid, {})
+            categories = product.get("categories", ["General"])
+            if not isinstance(categories, list) or not categories:
+                categories = [str(categories)] if categories else ["General"]
+            category = categories[0]
+            brand = product.get("brand", "Unknown")
+            price = float(product.get("price", 0.0)) if product else 0.0
+            weight = interaction_weights.get(interaction_type, 0.1)
 
             payload = {
                 "user_id": uid,
-                "query": query,
-                "clicked_product_id": pid,
-                "purchased": purchased,
-                "timestamp": fake.iso8601()
+                "product_id": pid,
+                "interaction_type": interaction_type,
+                "timestamp": int(time.time()),
+                "category": category,
+                "brand": brand,
+                "price": price,
+                "weight": weight,
             }
 
             interaction_ids.append(interaction_uuid)
-            texts_to_embed.append(query)
+            behavioral_text = f"user {interaction_type} {product.get('name', 'product')} {category} {brand} price {price}"
+            if query:
+                behavioral_text += f" for {query}"
+            texts_to_embed.append(behavioral_text)
             payloads.append(payload)
 
     # Batch encode all interaction queries
@@ -394,14 +435,14 @@ def main():
     client = get_qdrant_client()
     
     # Load ALL product data (no limit - use real data only)
-    products_source = load_product_data("data/products_payload.json", limit=20000)
+    products_source = load_product_data("data/all_products_payload.json", limit=5000)
     print(f"Loaded {len(products_source)} products from JSON")
 
     # A) Products (real data, no synthetic generation)
     product_ids, product_map = insert_products(client, products_source)
 
     # B) Users (derive preferences from products)
-    user_ids, user_profile_map = insert_users(client, product_map, count=2000)
+    user_ids, user_profile_map = insert_users(client, product_map, count=1000)
 
     # C) Financials (depends on Users and product prices)
     insert_financials(client, user_profile_map, product_map)

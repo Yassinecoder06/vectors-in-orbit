@@ -1,12 +1,14 @@
 import os
 import sys
 import logging
+import time
 from typing import List, Dict, Any, Optional
 
 from qdrant_client import QdrantClient, models
 from sentence_transformers import SentenceTransformer
 import torch
 from dotenv import load_dotenv
+import numpy as np
 
 # Optional pretty printing
 try:
@@ -23,7 +25,6 @@ except Exception:
 try:
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
-    import numpy as np
     _MATPLOTLIB_AVAILABLE = True
 except Exception:
     _MATPLOTLIB_AVAILABLE = False
@@ -178,6 +179,116 @@ def inspect_sample_payload(client: QdrantClient, collection_name: str) -> None:
     except Exception as e:
         logger.error(f"Failed to inspect payload: {e}")
 
+# =============================================================================
+# Collaborative Filtering Logic
+# =============================================================================
+
+def get_user_behavior_vector(client: QdrantClient, user_id: str) -> Optional[List[float]]:
+    """
+    Construct a user behavior vector based on recent interactions.
+    Applies time decay and interaction weights.
+    """
+    try:
+        # Fetch last 10 interactions
+        interactions, _ = client.scroll(
+            collection_name=INTERACTIONS_COLLECTION,
+            scroll_filter=models.Filter(
+                must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
+            ),
+            limit=10,
+            with_vectors=True,
+            with_payload=True,
+        )
+
+        if not interactions:
+            logger.info(f"No interactions found for user {user_id}")
+            return None
+
+        vectors = []
+        weights = []
+        current_time = int(time.time())
+        # Decay half-life: 7 days (60*60*24*7 seconds = 604800)
+        decay_constant = np.log(2) / 604800
+
+        for point in interactions:
+            if not point.vector:
+                continue
+            
+            payload = point.payload or {}
+            timestamp = payload.get("timestamp", current_time)
+            base_weight = payload.get("weight", 0.1)
+            
+            # Time decay
+            age_seconds = max(0, current_time - timestamp)
+            time_decay = np.exp(-decay_constant * age_seconds)
+            
+            final_weight = base_weight * time_decay
+            
+            vectors.append(point.vector)
+            weights.append(final_weight)
+
+        if not vectors:
+            return None
+
+        # Compute weighted average
+        weighted_sum = np.average(vectors, axis=0, weights=weights)
+        return weighted_sum.tolist()
+
+    except Exception as e:
+        logger.warning(f"Failed to compute user behavior vector: {e}")
+        return None
+
+
+def get_collaborative_scores(client: QdrantClient, user_id: str, candidate_ids: List[str]) -> Dict[str, float]:
+    """
+    Compute collaborative scores for candidate products based on similar users' interactions.
+    """
+    scores = {pid: 0.0 for pid in candidate_ids}
+    
+    try:
+        user_vector = get_user_behavior_vector(client, user_id)
+        if not user_vector:
+            return scores
+
+        # Find similar interactions (User-based CF proxy)
+        # We search for interactions similar to the user's aggregate behavior
+        # excluding the user's own interactions to find *similar users*
+        similar_interactions = client.search(
+            collection_name=INTERACTIONS_COLLECTION,
+            query_vector=user_vector,
+            query_filter=models.Filter(
+                must_not=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
+            ),
+            limit=20,
+            with_payload=True
+        )
+
+        total_score = 0.0
+        product_scores = {}
+
+        for hit in similar_interactions:
+            payload = hit.payload or {}
+            product_id = str(payload.get("product_id"))
+            
+            # Boost: Similarity * Interaction Weight
+            interaction_weight = payload.get("weight", 0.1)
+            score = hit.score * interaction_weight
+            
+            product_scores[product_id] = product_scores.get(product_id, 0.0) + score
+            total_score += score
+
+        # Normalize and map to candidates
+        if product_scores:
+             max_s = max(product_scores.values())
+             for pid in candidate_ids:
+                 if pid in product_scores:
+                     scores[pid] = product_scores[pid] / max_s
+
+    except Exception as e:
+        logger.warning(f"Collaborative filtering failed: {e}")
+    
+    return scores
+
 
 def semantic_product_search(
     client: QdrantClient,
@@ -254,35 +365,45 @@ def semantic_product_search(
         raise RuntimeError(f"Qdrant search error: {exc}") from exc
 
 
-def rerank_products(products: List[Dict[str, Any]], user_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+def rerank_products(
+    products: List[Dict[str, Any]], 
+    user_context: Dict[str, Any],
+    client: QdrantClient
+) -> List[Dict[str, Any]]:
     """
-    Rerank products by affordability and preferences.
+    Rerank products by affordability, preferences, and collaborative filtering.
     
-    final_score = 0.45 * semantic_score + 0.35 * affordability_score + 0.20 * preference_score
+    final_score = 
+      0.35 * semantic_score + 
+      0.30 * affordability_score + 
+      0.15 * preference_score + 
+      0.20 * collaborative_score
     """
     logger.info("Reranking %d products...", len(products))
 
     try:
         available_balance = float(user_context.get("available_balance", 0.0))
-    except (TypeError, ValueError):
-        logger.warning("Invalid available_balance, defaulting to 0.0")
-        available_balance = 0.0
-
-    try:
         credit_limit = float(user_context.get("credit_limit", 0.0))
     except (TypeError, ValueError):
-        logger.warning("Invalid credit_limit, defaulting to 0.0")
+        logger.warning("Invalid financial context, defaulting to 0.0")
+        available_balance = 0.0
         credit_limit = 0.0
 
     total_budget = max(0.0, available_balance + credit_limit)
+    user_id = user_context.get("user_id", "")
     
     preferred_categories = {_normalize_text(c) for c in user_context.get("preferred_categories", [])}
     preferred_brands = {_normalize_text(b) for b in user_context.get("preferred_brands", [])}
+
+    # Fetch Collaborative Scores
+    product_ids = [str(p.get("id")) for p in products]
+    collab_scores = get_collaborative_scores(client, user_id, product_ids)
 
     reranked = []
 
     for product in products:
         payload = product.get("payload", {})
+        pid = str(product.get("id"))
         
         try:
             price = float(payload.get("price", 0.0))
@@ -296,29 +417,73 @@ def rerank_products(products: List[Dict[str, Any]], user_context: Dict[str, Any]
             logger.warning(f"Invalid semantic_score: {product.get('semantic_score')}")
             semantic_score = 0.0
 
-        affordability_score = 0.0 if total_budget <= 0 else _clamp01(1.0 - (price / total_budget))
+        # Affordability: Must never be negative
+        if total_budget <= 0:
+            affordability_score = 0.0
+        else:
+            ratio = price / total_budget
+            affordability_score = _clamp01(1.0 - ratio)
 
-        category_match = 1.0 if _normalize_text(payload.get("category")) in preferred_categories else 0.0
-        brand_match = 1.0 if _normalize_text(payload.get("brand")) in preferred_brands else 0.0
+        # Preference: 1.0 if match, or if no preferences set
+        categories = payload.get("categories", [])
+        if not isinstance(categories, list):
+            categories = [categories] if categories else []
+        normalized_categories = {_normalize_text(c) for c in categories}
+        brand = _normalize_text(payload.get("brand"))
+        
+        category_match = any(c in preferred_categories for c in normalized_categories)
+        brand_match = brand in preferred_brands
 
         if not preferred_categories and not preferred_brands:
             preference_score = 1.0  # No penalty if user did not specify preferences
         else:
-            preference_score = max(category_match, brand_match)
+            preference_score = 1.0 if (category_match or brand_match) else 0.0
 
-        final_score = _clamp01(0.45 * semantic_score + 0.35 * affordability_score + 0.20 * preference_score)
+        # Collaborative Score
+        collaborative_score = collab_scores.get(pid, 0.0)
+
+        # Final Score
+        final_score = (
+            0.35 * semantic_score +
+            0.30 * affordability_score +
+            0.15 * preference_score +
+            0.20 * collaborative_score
+        )
+        final_score = _clamp01(final_score)
+
+        # Explainability Reason
+        reasons = []
+        if affordability_score > 0.8:
+            reasons.append("Matches your budget comfortably")
+        if collaborative_score > 0.5:
+            reasons.append("Users with similar behavior purchased this")
+        elif collaborative_score > 0.1:
+            reasons.append("Trending among similar users")
+        
+        if category_match:
+            matched = next((c for c in categories if _normalize_text(c) in preferred_categories), None)
+            if matched:
+                reasons.append(f"Matches your category preference ({matched})")
+            else:
+                reasons.append("Matches your category preference")
+        if brand_match:
+            reasons.append(f"Matches your brand preference ({payload.get('brand')})")
+            
+        reason_text = reasons[0] if reasons else "Based on semantic relevance"
 
         reranked.append(
             {
                 **product,
                 "affordability_score": affordability_score,
                 "preference_score": preference_score,
+                "collaborative_score": collaborative_score,
                 "final_score": final_score,
+                "reason": reason_text,
             }
         )
 
-    # Prefer preference matches first, then final score
-    reranked.sort(key=lambda x: (x["preference_score"], x["final_score"]), reverse=True)
+    # Sort by final score
+    reranked.sort(key=lambda x: x["final_score"], reverse=True)
     logger.info("Reranking complete.")
     return reranked
 
@@ -356,6 +521,10 @@ def search_products(
         else:
             user_context = get_user_context(user_id, client)
 
+        # Ensure user_id is in context for collaborative filtering
+        if "user_id" not in user_context:
+            user_context["user_id"] = user_id
+
         try:
             available_balance = float(user_context.get("available_balance", 0.0))
             credit_limit = float(user_context.get("credit_limit", 0.0))
@@ -373,7 +542,7 @@ def search_products(
             logger.warning("No products found")
             return []
         
-        reranked = rerank_products(products, user_context)
+        reranked = rerank_products(products, user_context, client)
         return reranked[:top_k]
         
     except Exception as exc:
@@ -566,7 +735,7 @@ if __name__ == "__main__":
                 "location": "San Francisco",
                 "risk_tolerance": "Medium",
                 "preferred_categories": ["Computers", "Smartphones", "Accessories"],
-                "preferred_brands": ["Samsung", "MI", "Apple"],
+                "preferred_brands": ["Samsung", "Apple"],
             }
         )
         
