@@ -180,7 +180,7 @@ Vectors In Orbit/
 │   └── all_products_payload.json
 │
 ├── report/
-│   ├── final_submission.tex        # Technical report (LaTeX)
+│   ├── report.tex        # Technical report (LaTeX)
 │   ├── compile_tex_to_pdf.py       # PDF generator
 │   └── [other reports]
 │

@@ -1,0 +1,97 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\setstretch{1.15}
+
+\title{\textbf{Context-Aware FinCommerce Engine using Vector Memory with Qdrant}}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{Project Overview}
+
+This project presents a \textbf{Context-Aware FinCommerce Engine} that enables intelligent product discovery and personalized recommendations by combining \textbf{semantic understanding} with \textbf{user-specific financial context}.
+
+Instead of relying solely on keyword-based search or static recommendation rules, the platform uses \textbf{vector embeddings stored in Qdrant} to capture semantic meaning across products, user profiles, financial constraints, and interaction history.
+
+At query time, the system retrieves semantically relevant products and then \textbf{re-ranks them using affordability constraints and personal preferences}, ensuring that recommendations are not only relevant but also financially realistic for each user.
+
+The solution demonstrates how \textbf{Qdrant can act as a vector-native memory layer} for real-time, context-aware decision-making in FinCommerce applications.
+
+\section*{Problem Statement}
+
+Modern e-commerce and fintech platforms struggle to deliver recommendations that are both \textbf{semantically relevant} and \textbf{financially appropriate} for individual users.
+
+Traditional recommendation systems typically:
+\begin{itemize}
+    \item Rely on keyword-based search or collaborative filtering
+    \item Ignore real-time financial constraints such as account balance or credit limits
+    \item Treat personalization, affordability, and user behavior as disconnected systems
+\end{itemize}
+
+This results in unrealistic product suggestions, poor user experience, and reduced conversion rates.
+
+There is a growing need for a \textbf{unified, vector-native system} capable of reasoning simultaneously over \textbf{products, user preferences, financial context, and interaction history}, while supporting fast retrieval and filtering at scale.
+
+\section*{Use Case Solved}
+
+The project addresses the \textbf{Context-Aware FinCommerce Recommendation} use case.
+
+When a user submits a natural-language query (e.g., \emph{``Laptop for machine learning under 1500''}), the system must return products that:
+\begin{itemize}
+    \item Are semantically relevant to the user’s intent
+    \item Match the user’s personal preferences (brands, categories)
+    \item Respect financial constraints such as available balance or credit limits
+    \item Adapt based on historical interactions
+\end{itemize}
+
+Two users issuing the same query may receive different recommendations depending on their financial situation and preferences. This enables \textbf{real-time, personalized, and financially realistic discovery}, which is not achievable with traditional search engines.
+
+\section*{How Qdrant Is Used}
+
+Qdrant serves as the \textbf{central vector memory and retrieval engine} of the system.
+
+\subsection*{Vector Collections}
+
+The system uses multiple Qdrant collections, each representing a different type of memory:
+
+\begin{itemize}
+    \item \textbf{Product Collection}: Stores semantic embeddings of product descriptions along with structured metadata such as price, category, brand, and availability.
+    \item \textbf{User Profile Collection}: Represents user preferences and personalization signals.
+    \item \textbf{Financial Context Collection}: Stores financial constraints such as balances, income, and credit limits.
+    \item \textbf{Interaction Memory Collection}: Captures historical user interactions and queries.
+\end{itemize}
+
+\subsection*{Query-Time Workflow}
+
+At query time, the system performs the following steps:
+\begin{enumerate}
+    \item The user query is embedded into a vector representation.
+    \item Qdrant retrieves the most semantically similar products using vector similarity search.
+    \item Payload filters enforce structured constraints such as price limits and availability.
+    \item Results are re-ranked using affordability and preference-based scoring.
+\end{enumerate}
+
+\subsection*{Why Qdrant}
+
+Qdrant enables:
+\begin{itemize}
+    \item High-dimensional semantic search over multimodal data
+    \item Hybrid retrieval combining vector similarity and structured filtering
+    \item Low-latency performance suitable for real-time personalization
+    \item A scalable and explainable architecture for FinCommerce intelligence
+\end{itemize}
+
+Rather than acting as a passive database, Qdrant functions as an \textbf{active intelligence layer} powering context-aware recommendations.
+
+\section*{Alignment with Hackathon Use Case}
+
+This project directly addresses \textbf{Use Case 2: Context-Aware FinCommerce Engine}, showcasing how Qdrant can enable personalized, constraint-aware discovery and recommendation using vector-native memory at scale.
+
+\end{document}
