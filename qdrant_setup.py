@@ -62,6 +62,11 @@ COLLECTION_CONFIGS = {
             "category": models.PayloadSchemaType.KEYWORD,
             "brand": models.PayloadSchemaType.KEYWORD,
             "price": models.PayloadSchemaType.FLOAT,
+            "product_price": models.PayloadSchemaType.FLOAT,
+            "available_balance": models.PayloadSchemaType.FLOAT,
+            "credit_limit": models.PayloadSchemaType.FLOAT,
+            "affordability_ratio": models.PayloadSchemaType.FLOAT,
+            "interaction_weight": models.PayloadSchemaType.FLOAT,
             "weight": models.PayloadSchemaType.FLOAT,
         }
     }

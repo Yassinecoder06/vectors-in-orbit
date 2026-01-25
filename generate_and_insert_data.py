@@ -312,8 +312,9 @@ def insert_financials(client: QdrantClient, user_profile_map: Dict[str, Dict[str
     print(f"✅ inserted {len(points)} items into '{collection_name}'")
 
 def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[str, Any]], product_map: Dict[str, Dict[str, Any]]):
-    """Generate interaction history aligned to interaction_memory schema."""
+    """Generate interaction history aligned to interaction_memory schema with financial context."""
     collection_name = "interaction_memory"
+    financial_collection = "financial_contexts"
     vector_size = 384
     points = []
     interaction_ids = []
@@ -326,6 +327,24 @@ def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[s
         print("Warning: No products available for interactions.")
         return
 
+    # Fetch all user financial contexts for correlation
+    print("Fetching financial contexts for users...")
+    user_financials = {}
+    try:
+        all_financials, _ = client.scroll(
+            collection_name=financial_collection,
+            limit=10000,
+            with_payload=True,
+            with_vectors=False,
+        )
+        for point in all_financials:
+            uid = point.payload.get("user_id")
+            if uid:
+                user_financials[uid] = point.payload
+        print(f"✅ Loaded {len(user_financials)} financial contexts")
+    except Exception as e:
+        print(f"⚠️  Could not load financial contexts: {e}")
+
     # Build helper: category -> product ids
     category_index: Dict[str, List[str]] = {}
     all_product_ids = list(product_map.keys())
@@ -336,14 +355,21 @@ def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[s
         for cat in cats:
             category_index.setdefault(cat, []).append(pid)
 
+    # Updated interaction weights (aligned with FA-CF)
     interaction_weights = {
-        "view": 0.1,
-        "click": 0.3,
-        "add_to_cart": 0.6,
+        "view": 0.2,
+        "click": 0.5,
+        "add_to_cart": 0.8,
         "purchase": 1.0,
     }
 
     for uid, profile in user_profile_map.items():
+        # Get user's financial context
+        financial_ctx = user_financials.get(uid, {})
+        available_balance = financial_ctx.get("available_balance", 1000.0)
+        credit_limit = financial_ctx.get("credit_limit", 2000.0)
+        total_budget = available_balance + credit_limit
+
         # 2-3 interactions per user
         num_interactions = random.randint(2, 3)
         preferred = profile.get('preferred_categories', [])
@@ -366,27 +392,38 @@ def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[s
 
             pid = random.choice(candidate_ids)
             product = product_map.get(pid, {})
+            product_name = product.get("name", "Unknown Product")
             categories = product.get("categories", ["General"])
             if not isinstance(categories, list) or not categories:
                 categories = [str(categories)] if categories else ["General"]
             category = categories[0]
             brand = product.get("brand", "Unknown")
             price = float(product.get("price", 0.0)) if product else 0.0
-            weight = interaction_weights.get(interaction_type, 0.1)
+            weight = interaction_weights.get(interaction_type, 0.2)
+
+            # Calculate affordability ratio
+            affordability_ratio = price / total_budget if total_budget > 0 else float("inf")
 
             payload = {
                 "user_id": uid,
                 "product_id": pid,
+                "product_name": product_name,  # Added for trending UI display
                 "interaction_type": interaction_type,
                 "timestamp": int(time.time()),
                 "category": category,
                 "brand": brand,
                 "price": price,
                 "weight": weight,
+                # FA-CF financial fields
+                "product_price": price,
+                "available_balance": available_balance,
+                "credit_limit": credit_limit,
+                "affordability_ratio": affordability_ratio,
+                "interaction_weight": weight,
             }
 
             interaction_ids.append(interaction_uuid)
-            behavioral_text = f"user {interaction_type} {product.get('name', 'product')} {category} {brand} price {price}"
+            behavioral_text = f"user {interaction_type} {product_name} {category} {brand} price {price}"
             if query:
                 behavioral_text += f" for {query}"
             texts_to_embed.append(behavioral_text)

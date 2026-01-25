@@ -6,9 +6,6 @@ env/
 # Environment variables
 .env
 
-# API keys and secrets
-test_api_key.txt
-
 # Python
 __pycache__/
 *.py[cod]

@@ -3,20 +3,42 @@ Context-Aware FinCommerce Engine - Streamlit Demo UI
 
 A hackathon demo showcasing personalized product recommendations
 using semantic search, affordability scoring, and preference matching.
+
+Architecture:
+- This module handles UI ONLY (no search logic, no logging logic)
+- Delegates to search_pipeline.py for search + ranking
+- Delegates to interaction_logger.py for interaction tracking + analytics
 """
 
 import streamlit as st
 import json
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 
 # Import backend search function
 from search_pipeline import search_products, get_qdrant_client, PRODUCTS_COLLECTION
-from interaction_logger import log_interaction
+from interaction_logger import log_interaction, get_interaction_stats_by_type
 
 # =============================================================================
 # Interaction Hooks
 # =============================================================================
+
+def _build_product_payload(product: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build a complete product payload for interaction logging.
+    
+    The product dict from search results has the ID at top level, 
+    but payload fields are nested. This merges them correctly.
+    """
+    payload = product.get("payload", {}).copy()
+    # Ensure product ID is in payload (it's at top level in search results)
+    if "id" not in payload and "product_id" not in payload:
+        product_id = product.get("id")
+        if product_id:
+            payload["id"] = product_id
+    return payload
+
 
 def on_product_view(product: Dict[str, Any], query: str = ""):
     """Hook for product view interaction."""
@@ -24,12 +46,12 @@ def on_product_view(product: Dict[str, Any], query: str = ""):
         user_context = build_user_context()
         log_interaction(
             user_id=user_context["user_id"],
-            product_payload=product.get("payload", {}),
+            product_payload=_build_product_payload(product),
             interaction_type="view",
             query=query
         )
     except Exception as e:
-        st.warning(f"Failed to log view: {e}")
+        pass  # Silent fail - don't show warnings for views
 
 
 def on_product_click(product: Dict[str, Any], query: str = ""):
@@ -38,12 +60,12 @@ def on_product_click(product: Dict[str, Any], query: str = ""):
         user_context = build_user_context()
         log_interaction(
             user_id=user_context["user_id"],
-            product_payload=product.get("payload", {}),
+            product_payload=_build_product_payload(product),
             interaction_type="click",
             query=query
         )
     except Exception as e:
-        st.warning(f"Failed to log click: {e}")
+        pass  # Silent fail
 
 
 def on_add_to_cart(product: Dict[str, Any], query: str = ""):
@@ -52,11 +74,11 @@ def on_add_to_cart(product: Dict[str, Any], query: str = ""):
         user_context = build_user_context()
         log_interaction(
             user_id=user_context["user_id"],
-            product_payload=product.get("payload", {}),
+            product_payload=_build_product_payload(product),
             interaction_type="add_to_cart",
             query=query
         )
-        st.toast("✅ Added to cart! (Interaction logged)", icon="🛒")
+        st.toast("✅ Added to cart!", icon="🛒")
     except Exception as e:
         st.warning(f"Failed to log add to cart: {e}")
 
@@ -67,7 +89,7 @@ def on_purchase(product: Dict[str, Any], query: str = ""):
         user_context = build_user_context()
         log_interaction(
             user_id=user_context["user_id"],
-            product_payload=product.get("payload", {}),
+            product_payload=_build_product_payload(product),
             interaction_type="purchase",
             query=query
         )
@@ -299,6 +321,79 @@ def render_sidebar():
     
     st.sidebar.markdown("---")
     st.sidebar.caption("🔬 Powered by Qdrant + SentenceTransformers")
+    
+    # Render trending section below main sidebar
+    render_trending_section()
+
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _fetch_trending_stats(timeframe_hours: int, top_k: int) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Cached fetch of trending stats to reduce Qdrant calls.
+    TTL of 30 seconds balances freshness with performance.
+    """
+    return get_interaction_stats_by_type(timeframe_hours=timeframe_hours, top_k=top_k)
+
+
+def render_trending_section():
+    """
+    Render trending product analytics in sidebar.
+    
+    Shows breakdown of interactions by type (most viewed, carted, purchased)
+    to provide social proof and engagement signals to users.
+    
+    Failure-safe: catches all exceptions to prevent sidebar crashes.
+    Uses 30-second cache to reduce latency.
+    """
+    st.sidebar.markdown("---")
+    
+    # Header with refresh button
+    col1, col2 = st.sidebar.columns([3, 1])
+    with col1:
+        st.markdown("### 📊 Trending (24h)")
+    with col2:
+        if st.button("🔄", key="refresh_trending", help="Refresh trending data"):
+            _fetch_trending_stats.clear()
+            st.rerun()
+    
+    try:
+        stats = _fetch_trending_stats(timeframe_hours=24, top_k=5)
+        
+        # Check if we have any stats to show
+        has_data = any(len(v) > 0 for v in stats.values())
+        
+        if not has_data:
+            st.sidebar.caption("_No recent activity_")
+            return
+        
+        # Most Viewed
+        if stats.get("viewed"):
+            with st.sidebar.expander("👁️ Most Viewed", expanded=False):
+                for item in stats["viewed"][:3]:
+                    name = str(item.get("product_name", "Unknown"))[:25]
+                    count = item.get("count", 0)
+                    st.caption(f"• {name} ({count})")
+        
+        # Most Added to Cart
+        if stats.get("carted"):
+            with st.sidebar.expander("🛒 Most Added to Cart", expanded=False):
+                for item in stats["carted"][:3]:
+                    name = str(item.get("product_name", "Unknown"))[:25]
+                    count = item.get("count", 0)
+                    st.caption(f"• {name} ({count})")
+        
+        # Most Purchased
+        if stats.get("purchased"):
+            with st.sidebar.expander("💳 Most Purchased", expanded=True):
+                for item in stats["purchased"][:3]:
+                    name = str(item.get("product_name", "Unknown"))[:25]
+                    count = item.get("count", 0)
+                    st.caption(f"• {name} ({count})")
+                    
+    except Exception as e:
+        # Never crash the sidebar
+        st.sidebar.caption("_Unable to load trending data_")
 
 
 def render_product_card(product: Dict[str, Any], rank: int):
@@ -369,8 +464,13 @@ def render_product_card(product: Dict[str, Any], rank: int):
             for explanation in explanations[:3]:  # Show top 3 explanations
                 st.caption(f"• {explanation}")
         
-        # Expandable explanation section
-        with st.expander("🔍 See detailed breakdown"):
+        # Session state key for this product's expanded state
+        expand_key = f"expand_{rank}_{name[:10]}"
+        if expand_key not in st.session_state:
+            st.session_state[expand_key] = False
+        
+        # Expandable explanation section - controlled by session state or expander
+        with st.expander("🔍 View Details & Breakdown", expanded=st.session_state[expand_key]):
             if description:
                 st.markdown("**Full Description**")
                 st.write(description)
@@ -392,19 +492,14 @@ def render_product_card(product: Dict[str, Any], rank: int):
                 payload,
             )
         
-        # Interaction buttons
-        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        # Interaction buttons - only Add to Cart and Buy Now
+        col_btn1, col_btn2 = st.columns(2)
         
         with col_btn1:
-            if st.button("👁️ View Details", key=f"view_{rank}_{name[:10]}", use_container_width=True):
-                on_product_click(product, st.session_state.get("search_query", ""))
-                st.info(f"Viewing details for {name}")
-        
-        with col_btn2:
             if st.button("🛒 Add to Cart", key=f"cart_{rank}_{name[:10]}", use_container_width=True):
                 on_add_to_cart(product, st.session_state.get("search_query", ""))
         
-        with col_btn3:
+        with col_btn2:
             if st.button("💳 Buy Now", key=f"buy_{rank}_{name[:10]}", use_container_width=True):
                 on_purchase(product, st.session_state.get("search_query", ""))
         
