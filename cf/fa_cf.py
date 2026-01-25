@@ -197,15 +197,76 @@ def get_fa_cf_scores(
             contribution = final_similarity * h["weight"] * h["score"]
             product_scores[pid] = product_scores.get(pid, 0.0) + contribution
 
-    if not product_scores:
-        return scores
+    # =====================
+    # SELF INTERACTION BOOST
+    # =====================
+    # Provide immediate reinforcement from the user's own recent interactions.
+    # This ensures real-time effects (e.g., purchase) increase CF score even when
+    # neighbor overlap is limited.
+    try:
+        self_interactions, _ = client.scroll(
+            collection_name=INTERACTIONS_COLLECTION,
+            scroll_filter=models.Filter(
+                must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
+            ),
+            limit=300,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception:
+        self_interactions = []
 
-    max_score = max(product_scores.values())
-    if max_score <= 0:
-        return scores
+    self_scores: Dict[str, float] = {}
+    if self_interactions:
+        current_time = int(time.time())
+        decay_constant = math.log(2) / 86400.0  # 1-day half-life for self boost
+        candidate_set = {str(pid) for pid in candidate_ids}
+        for p in self_interactions:
+            payload = p.payload or {}
+            pid = str(payload.get("product_id", ""))
+            if pid not in candidate_set:
+                continue
+            # Respect budget limits: skip items priced above user's budget
+            try:
+                price = float(payload.get("product_price", payload.get("price", 0.0)) or 0.0)
+            except (TypeError, ValueError):
+                price = 0.0
+            if user_budget and price > user_budget:
+                continue
+            try:
+                ts = int(payload.get("timestamp", current_time))
+            except (TypeError, ValueError):
+                ts = current_time
+            age_seconds = max(0, current_time - ts)
+            time_decay = math.exp(-decay_constant * age_seconds)
+            w = _safe_weight(payload)
+            # Stronger boost for high-intent actions
+            itype = str(payload.get("interaction_type", "view"))
+            intent_multiplier = {
+                "view": 0.5,
+                "click": 0.8,
+                "add_to_cart": 1.2,
+                "purchase": 1.5,
+            }.get(itype, 0.5)
+            contribution = max(0.0, w * intent_multiplier * time_decay)
+            self_scores[pid] = self_scores.get(pid, 0.0) + contribution
 
+    # Normalize neighbor and self scores separately, then blend
+    blended_scores: Dict[str, float] = {str(pid): 0.0 for pid in candidate_ids}
+    if product_scores:
+        max_neighbor = max(product_scores.values())
+        if max_neighbor > 0:
+            for pid, val in product_scores.items():
+                blended_scores[pid] = val / max_neighbor
+    if self_scores:
+        for pid, val in self_scores.items():
+            # Blend: 70% neighbors, 30% self boost (tunable)
+            # Use capped absolute self signal to avoid normalization saturation
+            self_signal = min(1.0, max(0.0, val))
+            blended_scores[pid] = 0.7 * blended_scores.get(pid, 0.0) + 0.3 * self_signal
+
+    # If both empty, keep zeros
     for pid in scores:
-        if pid in product_scores:
-            scores[pid] = product_scores[pid] / max_score
+        scores[pid] = blended_scores.get(pid, scores[pid])
 
     return scores

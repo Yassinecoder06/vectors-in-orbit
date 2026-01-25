@@ -191,11 +191,12 @@ def _embed_behavioral_text(text: str) -> Optional[List[float]]:
 
 def log_interaction(
     user_id: str,
-    product_payload_or_id: Any,
-    interaction_type: Literal["view", "click", "add_to_cart", "purchase"],
+    product_payload_or_id: Any = None,
+    interaction_type: Literal["view", "click", "add_to_cart", "purchase"] = "view",
     product_price: Optional[float] = None,
     user_context: Optional[Dict[str, Any]] = None,
     query: Optional[str] = None,
+    product_payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """
     Financial-aware interaction logging (real-time upsert).
@@ -204,6 +205,9 @@ def log_interaction(
     product payload. If `product_payload_or_id` is a dict, the legacy path is
     used. If it is a product ID, product_price and user_context must be
     provided (raises on invalid financial data).
+
+    Also accepts the legacy keyword argument `product_payload` used by the UI
+    hooks; when provided it takes precedence over `product_payload_or_id`.
     """
     try:
         # Get Qdrant client safely
@@ -213,6 +217,13 @@ def log_interaction(
             return False
         
         client, products_collection, interactions_collection = result
+        
+        # Support legacy keyword `product_payload` used by UI hooks
+        if product_payload is not None:
+            product_payload_or_id = product_payload
+
+        if product_payload_or_id is None:
+            raise ValueError("product_payload_or_id or product_payload is required")
         
         # Validate interaction type
         if interaction_type not in INTERACTION_WEIGHTS:

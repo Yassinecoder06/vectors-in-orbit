@@ -118,7 +118,7 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
 
     # Batch encode all texts at once (much faster)
     print(f"Encoding {len(texts_to_embed)} product embeddings...")
-    embeddings = embedding_model.encode(texts_to_embed, device=DEVICE, show_progress_bar=True, convert_to_numpy=True)
+    embeddings = embedding_model.encode(texts_to_embed, device=DEVICE, batch_size=128, show_progress_bar=True, convert_to_numpy=True)
     
     # Build points with pre-computed embeddings
     for i, (product_id, embedding, payload) in enumerate(zip(product_ids, embeddings, payloads)):
@@ -206,7 +206,7 @@ def insert_users(client: QdrantClient, product_map: Dict[str, Dict[str, Any]], c
 
     # Batch encode all user embeddings
     print(f"Encoding {len(texts_to_embed)} user embeddings...")
-    embeddings = embedding_model.encode(texts_to_embed, device=DEVICE, show_progress_bar=True, convert_to_numpy=True)
+    embeddings = embedding_model.encode(texts_to_embed, device=DEVICE, batch_size=128, show_progress_bar=True, convert_to_numpy=True)
     
     for user_uuid, embedding, payload in zip(user_ids, embeddings, payloads):
         points.append(PointStruct(
@@ -431,7 +431,7 @@ def insert_interactions(client: QdrantClient, user_profile_map: Dict[str, Dict[s
 
     # Batch encode all interaction queries
     print(f"Encoding {len(texts_to_embed)} interaction embeddings...")
-    embeddings = embedding_model.encode(texts_to_embed, device=DEVICE, show_progress_bar=True, convert_to_numpy=True)
+    embeddings = embedding_model.encode(texts_to_embed, device=DEVICE, batch_size=128, show_progress_bar=True, convert_to_numpy=True)
     
     for interaction_uuid, embedding, payload in zip(interaction_ids, embeddings, payloads):
         points.append(PointStruct(

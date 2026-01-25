@@ -48,6 +48,7 @@ def on_product_view(product: Dict[str, Any], query: str = ""):
             user_id=user_context["user_id"],
             product_payload=_build_product_payload(product),
             interaction_type="view",
+            user_context=user_context,
             query=query
         )
     except Exception as e:
@@ -62,6 +63,7 @@ def on_product_click(product: Dict[str, Any], query: str = ""):
             user_id=user_context["user_id"],
             product_payload=_build_product_payload(product),
             interaction_type="click",
+            user_context=user_context,
             query=query
         )
     except Exception as e:
@@ -76,6 +78,7 @@ def on_add_to_cart(product: Dict[str, Any], query: str = ""):
             user_id=user_context["user_id"],
             product_payload=_build_product_payload(product),
             interaction_type="add_to_cart",
+            user_context=user_context,
             query=query
         )
         st.toast("✅ Added to cart!", icon="🛒")
@@ -91,6 +94,7 @@ def on_purchase(product: Dict[str, Any], query: str = ""):
             user_id=user_context["user_id"],
             product_payload=_build_product_payload(product),
             interaction_type="purchase",
+            user_context=user_context,
             query=query
         )
         st.toast("✅ Purchase logged! Thank you!", icon="💳")
