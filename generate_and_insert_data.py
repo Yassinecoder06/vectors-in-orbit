@@ -36,7 +36,12 @@ def get_qdrant_client() -> QdrantClient:
         print("Error: QDRANT_URL and QDRANT_API_KEY must be set.")
         sys.exit(1)
 
-    return QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+    return QdrantClient(
+        url=qdrant_url, 
+        api_key=qdrant_api_key,
+        timeout=120
+            # Increase timeout to 120 seconds
+    )
 
 def generate_random_vector(size: int) -> List[float]:
     """Generate a random normalized vector (fallback for non-text / financial data)."""
@@ -98,7 +103,7 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
         description = src.get("description", "No Available Description")
 
         # Create rich text representation for embedding
-        text_to_embed = f"{name} {description} {' '.join(categories)} {brand} {region}"
+        text_to_embed = f"{name} {' '.join(categories)} {brand}"
         texts_to_embed.append(text_to_embed)
 
         payload = {
@@ -129,18 +134,19 @@ def insert_products(client: QdrantClient, products_source: List[Dict]) -> List[s
         ))
 
     # Insert in batches to avoid server disconnection
-    batch_size = 100  # Reduced from 500 for Qdrant Cloud stability
+    batch_size = 100  # Batch size for Qdrant Cloud
     print(f"Upserting {len(points)} points in batches of {batch_size}...")
     for batch_start in range(0, len(points), batch_size):
         batch_end = min(batch_start + batch_size, len(points))
         batch = points[batch_start:batch_end]
         
         # Retry logic with exponential backoff
-        max_retries = 3
+        max_retries = 5  # Increased retries
         for attempt in range(max_retries):
             try:
-                client.upsert(collection_name=collection_name, points=batch)
+                client.upsert(collection_name=collection_name, points=batch, wait=True)
                 print(f"  ✅ Upserted points {batch_start} to {batch_end}")
+                time.sleep(0.5)  # Small delay between batches
                 break
             except Exception as e:
                 if attempt < max_retries - 1:

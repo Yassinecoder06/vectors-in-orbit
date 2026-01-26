@@ -1,8 +1,8 @@
 """Scoring constants for recommendation pipeline."""
 
 FA_CF_WEIGHTS = {
-    "semantic": 0.40,
-    "affordability": 0.25,
+    "semantic": 0.50,
+    "affordability": 0.15,
     "preference": 0.15,
     "collaborative": 0.15,
     "popularity": 0.05,
