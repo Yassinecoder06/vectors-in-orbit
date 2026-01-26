@@ -3,6 +3,7 @@
 venv/
 env/
 
+
 # Environment variables
 .env
 
@@ -25,3 +26,13 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+# Project directories
+report/
+tools/
+tests/
+scoring/
+interactions/
+explanations/
+docs/
+demos/
+cf/
