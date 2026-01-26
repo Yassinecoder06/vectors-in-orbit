@@ -1,4 +1,4 @@
-# Vectors In Orbit
+# Fin-e Trip
 
 A production-ready e-commerce recommendation system that combines semantic search, financial constraints, collaborative filtering, and real-time popularity tracking using Qdrant vector database.
 
@@ -288,4 +288,4 @@ MIT License
 
 ---
 
-**Vectors In Orbit**: Bringing financial awareness to e-commerce recommendations through vector search and collaborative filtering.
+**Fin-e Trip**: Bringing financial awareness to e-commerce recommendations through vector search and collaborative filtering.

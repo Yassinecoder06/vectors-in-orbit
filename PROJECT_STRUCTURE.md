@@ -1,6 +1,6 @@
 # Project Organization
 
-This document describes the structure of the Vectors In Orbit e-commerce recommendation system.
+This document describes the structure of the Fin-e Trip e-commerce recommendation system.
 
 ## Directory Structure
 
@@ -298,6 +298,6 @@ Remove-Item -Recurse -Force __pycache__
 
 ---
 
-**Project**: Vectors In Orbit  
+**Project**: Fin-e Trip  
 **Version**: FA-CF v1.0 (Production Ready)  
 **Last Updated**: January 26, 2026
