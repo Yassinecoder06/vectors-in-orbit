@@ -27,7 +27,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 # Project directories
-report/
+reports/
 tools/
 tests/
 scoring/
