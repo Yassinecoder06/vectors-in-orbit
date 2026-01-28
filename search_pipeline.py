@@ -537,15 +537,20 @@ def rerank_products(
         affordable = affordability_score > 0.0
 
         # ============ FAST SIGNAL 2: Preference ============
-        # (~5ms) Brand/category matching
+        # (~5ms) Brand/category matching with substring matching
         categories = payload.get("categories", [])
         if not isinstance(categories, list):
             categories = [categories] if categories else []
-        normalized_categories = {_normalize_text(c) for c in categories}
+        normalized_categories = [_normalize_text(c) for c in categories]
         brand = _normalize_text(payload.get("brand"))
         
-        category_match = any(c in preferred_categories for c in normalized_categories)
-        brand_match = brand in preferred_brands
+        # Bidirectional substring matching for categories
+        category_match = any(
+            any(pref in cat or cat in pref for pref in preferred_categories)
+            for cat in normalized_categories
+        )
+        # Bidirectional substring matching for brands
+        brand_match = any(pref in brand or brand in pref for pref in preferred_brands)
 
         if not preferred_categories and not preferred_brands:
             preference_score = 1.0  # No penalty if user did not specify preferences

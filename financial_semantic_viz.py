@@ -454,29 +454,14 @@ def export_products_for_visualization(
             }
             return mapping.get(tier, 0.5)
         
-        # Use passed risk_tolerance parameter if provided, otherwise try to get from Qdrant
+        # Use passed risk_tolerance parameter if provided, otherwise default to Medium
         if risk_tolerance:
             user_risk_tolerance = _map_risk_tier_to_numeric(risk_tolerance)
             user_risk_tier = risk_tolerance.lower()
         else:
-            # Fallback to querying user_profiles collection
-            user_risk_tier = None
-            try:
-                user_profiles = client.scroll(
-                    collection_name="user_profiles",
-                    limit=1,
-                    with_payload=True,
-                    with_vectors=False,
-                )
-                if user_profiles[0]:
-                    for point in user_profiles[0]:
-                        if point.payload.get("user_id") == user_id:
-                            user_risk_tier = point.payload.get("risk_tolerance", "medium")
-                            break
-            except Exception as e:
-                pass  # Use default
-            
-            user_risk_tolerance = _map_risk_tier_to_numeric(user_risk_tier if user_risk_tier else "medium")
+            # Default to Medium risk tolerance (not stored in user_profiles anymore)
+            user_risk_tier = "medium"
+            user_risk_tolerance = _map_risk_tier_to_numeric("medium")
         
         # ===== 2. Get User Financial Context (budget) =====
         user_budget = 5000.0  # Default budget

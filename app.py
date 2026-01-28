@@ -290,32 +290,24 @@ def render_sidebar():
     
     st.sidebar.markdown("### 💰 Financial Context")
     
-    # Available balance slider
-    st.session_state.available_balance = st.sidebar.slider(
-        "Available Balance ($)",
+    # Available balance - direct number input
+    st.session_state.available_balance = st.sidebar.number_input(
+        "💵 Available Balance ($)",
         min_value=0,
-        max_value=50000,
+        max_value=1000000,
         value=int(st.session_state.available_balance),
         step=100,
-        help="Your current available funds",
+        help="How much money do you have right now?"
     )
     
-    # Credit limit slider
-    st.session_state.credit_limit = st.sidebar.slider(
-        "Credit Limit ($)",
+    # Credit limit - direct number input
+    st.session_state.credit_limit = st.sidebar.number_input(
+        "💳 Credit Limit ($)",
         min_value=0,
-        max_value=100000,
+        max_value=1000000,
         value=int(st.session_state.credit_limit),
-        step=500,
-        help="Your maximum credit allowance",
-    )
-    
-    # Risk tolerance selector
-    st.session_state.risk_tolerance = st.sidebar.selectbox(
-        "🎯 Risk Tolerance",
-        options=["Low", "Medium", "High"],
-        index=["Low", "Medium", "High"].index(st.session_state.risk_tolerance),
-        help="How much product price volatility or financial stretch are you comfortable with?",
+        step=100,
+        help="What's your total credit allowance?"
     )
     
     # Total budget display
@@ -579,7 +571,17 @@ def render_explanation(
         category_match = any(str(c).lower() in preferred_categories for c in categories)
         
         if brand_match and category_match:
-            matched = next((c for c in categories if str(c).lower() in preferred_categories), None)
+            # Find matched category with bidirectional substring matching
+            matched = None
+            for cat in categories:
+                cat_lower = str(cat).lower()
+                for pref in preferred_categories:
+                    pref_lower = pref.lower()
+                    if pref_lower in cat_lower or cat_lower in pref_lower:
+                        matched = cat
+                        break
+                if matched:
+                    break
             if matched:
                 st.success(f"Matches brand ({brand}) & category ({matched})")
             else:
@@ -587,7 +589,17 @@ def render_explanation(
         elif brand_match:
             st.success(f"Matches preferred brand: {brand}")
         elif category_match:
-            matched = next((c for c in categories if str(c).lower() in preferred_categories), None)
+            # Find matched category with bidirectional substring matching
+            matched = None
+            for cat in categories:
+                cat_lower = str(cat).lower()
+                for pref in preferred_categories:
+                    pref_lower = pref.lower()
+                    if pref_lower in cat_lower or cat_lower in pref_lower:
+                        matched = cat
+                        break
+                if matched:
+                    break
             if matched:
                 st.success(f"Matches preferred category: {matched}")
             else:
@@ -595,7 +607,12 @@ def render_explanation(
         elif not st.session_state.preferred_brands and not st.session_state.preferred_categories:
             st.info("No preferences set - all products considered equally")
         else:
-            st.warning("No preference match")
+            # Debug: show product categories when no match
+            if categories:
+                cat_str = ", ".join([str(c) for c in categories[:3]])
+                st.warning(f"No match (product cats: {cat_str})")
+            else:
+                st.warning("No preference match")
     
     with col4:
         st.markdown("**🤝 Collaborative**")
@@ -758,6 +775,17 @@ def render_financial_landscape(user_id: str, risk_tolerance: str = "Medium", top
         st.error(f"Error loading financial landscape: {e}")
 
 
+def on_search_change():
+    """Callback when search input changes (Enter key pressed)."""
+    query = st.session_state.search_input
+    if query and query.strip():
+        st.session_state.search_query = query
+        top_k = st.session_state.get("top_k_slider", 5)
+        with st.spinner("🔍 Searching across products..."):
+            st.session_state.search_results = perform_search(query, top_k)
+            st.session_state.has_searched = True
+
+
 def render_main_area():
     """Render main search interface and results."""
     st.title("🛒 Context-Aware FinCommerce Engine")
@@ -775,6 +803,8 @@ def render_main_area():
             value=st.session_state.search_query,
             placeholder="e.g., 'comfortable running shoes for marathon training'",
             label_visibility="collapsed",
+            key="search_input",
+            on_change=on_search_change
         )
     
     with col2:
