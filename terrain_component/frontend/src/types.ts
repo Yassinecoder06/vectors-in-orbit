@@ -4,7 +4,7 @@ export type TerrainPoint = {
   height: number;
   color: string;
   price: number;
-   price_normalized?: number;
+  price_normalized?: number;
   brand: string;
   category: string;
   name: string;
@@ -12,6 +12,7 @@ export type TerrainPoint = {
   score: number;
   risk_tolerance: number;
   imageUrl?: string;
+  rank?: number;  // 1-indexed rank (1 = best match)
 };
 
 export type TerrainBounds = {

@@ -6,6 +6,7 @@ import KeyboardControls from "./KeyboardControls";
 import CameraFocus from "./CameraFocus";
 import ControlIndicators from "./ControlIndicators";
 import TourPanel from "./TourPanel";
+import QueryPath from "./QueryPath";
 import {
   Streamlit,
   withStreamlitConnection,
@@ -394,11 +395,13 @@ function Scene({
   onSelect,
   focusPosition,
   onFocusComplete,
+  showQueryPath,
 }: {
   payload: TerrainPayload;
   onSelect: (point: TerrainPoint) => void;
   focusPosition: [number, number, number] | null;
   onFocusComplete?: () => void;
+  showQueryPath?: boolean;
 }) {
   const bounds = useMemo(() => deriveBounds(payload), [payload]);
   const highlightPoints = useMemo(
@@ -436,6 +439,8 @@ function Scene({
       <pointLight position={[-20, 15, -10]} intensity={0.5} />
       <Stars radius={80} depth={40} factor={4} fade speed={0.4} />
       <TerrainSurface points={payload.points} bounds={bounds} seed={meshSeed} />
+      {/* Query path showing the journey through ranked products */}
+      <QueryPath points={payload.points} visible={showQueryPath ?? true} />
       <ProductMarkers points={payload.points} onSelect={onSelect} />
       <ProductBillboards points={payload.points} onSelect={onSelect} />
       <ProductLabels points={payload.points} onSelect={onSelect} />
@@ -582,6 +587,7 @@ const TerrainApp = (props: ComponentProps) => {
         onSelect={handleSelect}
         focusPosition={focusPosition}
         onFocusComplete={handleFocusComplete}
+        showQueryPath={true}
       />
       <NarrationPanel payload={payload} />
       <ControlIndicators visible={!tourActive} />
