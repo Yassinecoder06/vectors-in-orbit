@@ -1,5 +1,5 @@
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Stars, Billboard, useTexture, Html } from "@react-three/drei";
+import { OrbitControls, Stars, Billboard, useTexture, Html, Line, Cloud, Sky } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
 import KeyboardControls from "./KeyboardControls";
@@ -8,11 +8,112 @@ import ControlIndicators from "./ControlIndicators";
 import TourPanel from "./TourPanel";
 import QueryPath from "./QueryPath";
 import {
+  generateMountainsFromProducts,
+  generateRiverPath,
+  buildHeightGrid,
+  buildTerrainMesh,
+  sampleTerrainHeight,
+  type Mountain,
+  type RiverPoint,
+} from "./terrainUtils";
+import {
   Streamlit,
   withStreamlitConnection,
   type ComponentProps,
 } from "streamlit-component-lib";
 import type { TerrainPayload, TerrainPoint, TerrainBounds } from "./types";
+
+// Fluffy cartoon cloud component
+const CartoonCloud = ({ 
+  position, 
+  scale = 1 
+}: { 
+  position: [number, number, number]; 
+  scale?: number;
+}) => {
+  const cloudColor = "#FFFFFF";
+  return (
+    <group position={position} scale={scale}>
+      {/* Main body */}
+      <mesh position={[0, 0, 0]}>
+        <sphereGeometry args={[3, 16, 16]} />
+        <meshBasicMaterial color={cloudColor} />
+      </mesh>
+      {/* Left bump */}
+      <mesh position={[-2.5, 0.5, 0]}>
+        <sphereGeometry args={[2.2, 16, 16]} />
+        <meshBasicMaterial color={cloudColor} />
+      </mesh>
+      {/* Right bump */}
+      <mesh position={[2.5, 0.3, 0]}>
+        <sphereGeometry args={[2.5, 16, 16]} />
+        <meshBasicMaterial color={cloudColor} />
+      </mesh>
+      {/* Top bump */}
+      <mesh position={[0.5, 1.8, 0]}>
+        <sphereGeometry args={[2, 16, 16]} />
+        <meshBasicMaterial color={cloudColor} />
+      </mesh>
+      {/* Extra bumps for fluffiness */}
+      <mesh position={[-1.5, 1.2, 0.5]}>
+        <sphereGeometry args={[1.5, 12, 12]} />
+        <meshBasicMaterial color={cloudColor} />
+      </mesh>
+      <mesh position={[1.8, 1, -0.3]}>
+        <sphereGeometry args={[1.8, 12, 12]} />
+        <meshBasicMaterial color={cloudColor} />
+      </mesh>
+    </group>
+  );
+};
+
+// Sky decoration with clouds
+const SkyDecoration = ({ bounds, seed }: { bounds: TerrainBounds; seed: number }) => {
+  const clouds = useMemo(() => {
+    const rand = mulberry32(seed + 777);
+    const cloudList: Array<{
+      id: string;
+      position: [number, number, number];
+      scale: number;
+    }> = [];
+    
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+    const spread = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) * 1.2;
+    
+    // Generate 8-12 clouds
+    const numClouds = 8 + Math.floor(rand() * 5);
+    
+    for (let i = 0; i < numClouds; i++) {
+      const angle = (i / numClouds) * Math.PI * 2 + rand() * 0.5;
+      const dist = spread * 0.4 + rand() * spread * 0.4;
+      
+      cloudList.push({
+        id: `cloud-${i}`,
+        position: [
+          centerX + Math.cos(angle) * dist,
+          35 + rand() * 25,
+          centerZ + Math.sin(angle) * dist,
+        ],
+        scale: 0.8 + rand() * 0.6,
+      });
+    }
+    
+    return cloudList;
+  }, [bounds, seed]);
+  
+  return (
+    <group>
+      {clouds.map((cloud) => (
+        <CartoonCloud
+          key={cloud.id}
+          position={cloud.position}
+          scale={cloud.scale}
+        />
+      ))}
+    </group>
+  );
+};
 
 const mulberry32 = (seed: number) => {
   let t = seed >>> 0;
@@ -101,7 +202,7 @@ const truncateLabel = (value: string, maxLength = 22) => {
 };
 
 const DEFAULT_BOUNDS: TerrainBounds = { minX: -20, maxX: 20, minZ: -20, maxZ: 20 };
-const TERRAIN_RESOLUTION = 140;
+const TERRAIN_RESOLUTION = 160;
 
 const deriveBounds = (payload: TerrainPayload): TerrainBounds => {
   if (payload.meta?.bounds) {
@@ -120,160 +221,115 @@ const deriveBounds = (payload: TerrainPayload): TerrainBounds => {
   };
 };
 
-const sampleHeightAt = (x: number, z: number, points: TerrainPoint[], sigma: number): number => {
-  if (!points.length) {
-    return 0;
-  }
-  const sigma2 = sigma * sigma;
-  let weightedSum = 0;
-  let totalWeight = 0;
-  for (const point of points) {
-    const dx = x - point.position[0];
-    const dz = z - point.position[2];
-    const dist2 = dx * dx + dz * dz;
-    if (dist2 < 1e-6) {
-      return point.height;
-    }
-    const influence = Math.exp(-dist2 / (2 * sigma2));
-    weightedSum += point.height * influence;
-    totalWeight += influence;
-  }
-  return totalWeight > 1e-6 ? weightedSum / totalWeight : 0;
-};
-
-const mountainNoise = (x: number, z: number, seed: number) => {
-  const f1 = 0.025;
-  const f2 = 0.055;
-  const f3 = 0.011;
-  const ridge = Math.sin(x * f1 + seed * 0.01) * 0.8;
-  const trough = Math.cos(z * (f1 * 1.8) - seed * 0.017) * 0.6;
-  const swirl = Math.sin((x + z) * f2 + seed * 0.006) * 0.45;
-  const basin = Math.cos((x - z) * f3 + seed * 0.014) * 0.3;
-  return ridge + trough + swirl + basin;
-};
-
-const buildTerrainGeometry = (
-  points: TerrainPoint[],
-  bounds: TerrainBounds,
-  seed: number,
-  peakHeight: number = 25
-): THREE.BufferGeometry | null => {
-  if (!points.length) {
-    return null;
-  }
-
-  const width = Math.max(bounds.maxX - bounds.minX, 1);
-  const depth = Math.max(bounds.maxZ - bounds.minZ, 1);
-  const resolution = TERRAIN_RESOLUTION;
-  const vertices = new Float32Array((resolution + 1) * (resolution + 1) * 3);
-  const colors = new Float32Array((resolution + 1) * (resolution + 1) * 3);
-  const heights = new Float32Array((resolution + 1) * (resolution + 1));
-  const indices = new Uint32Array(resolution * resolution * 6);
-  const stepX = width / resolution;
-  const stepZ = depth / resolution;
-  const smoothing = Math.max(width, depth) * 0.22;
-  const noiseAmplitude = Math.max(width, depth) * 0.08;
+// River component - renders the water surface
+const RiverMesh = ({ riverPoints, bounds }: { riverPoints: RiverPoint[]; bounds: TerrainBounds }) => {
+  if (riverPoints.length < 2) return null;
   
-  // Center of the terrain for central peak
-  const centerX = (bounds.minX + bounds.maxX) / 2;
-  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
-  const maxRadius = Math.max(width, depth) / 2;
-
-  let minY = Number.POSITIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-
-  for (let iz = 0; iz <= resolution; iz++) {
-    for (let ix = 0; ix <= resolution; ix++) {
-      const vertIndex = iz * (resolution + 1) + ix;
-      const x = bounds.minX + ix * stepX;
-      const z = bounds.minZ + iz * stepZ;
-      
-      // Base height from product positions
-      const productHeight = sampleHeightAt(x, z, points, smoothing);
-      
-      // Central peak - creates mountain shape regardless of products
-      const distFromCenter = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
-      const normalizedDist = Math.min(distFromCenter / maxRadius, 1);
-      // Smooth falloff from center peak using cosine curve
-      const centralPeak = Math.max(0, Math.cos(normalizedDist * Math.PI * 0.5)) * peakHeight * 0.6;
-      
-      // Procedural noise for natural variation
-      const noise = mountainNoise(x, z, seed) * noiseAmplitude;
-      
-      // Combine: product heights + central peak + noise
-      // Product heights dominate near products, central peak fills gaps
-      const y = Math.max(productHeight, centralPeak * 0.5) + centralPeak * 0.5 + noise;
-      
-      heights[vertIndex] = y;
-      minY = Math.min(minY, y);
-      maxY = Math.max(maxY, y);
-      vertices[vertIndex * 3 + 0] = x;
-      vertices[vertIndex * 3 + 1] = y;
-      vertices[vertIndex * 3 + 2] = z;
-    }
-  }
-
-  const rangeY = Math.max(maxY - minY, 1e-6);
-  const color = new THREE.Color();
-  for (let idx = 0; idx < heights.length; idx++) {
-    const t = (heights[idx] - minY) / rangeY;
-    const eased = Math.pow(t, 1.1);
+  const riverGeometry = useMemo(() => {
+    const riverWidth = 4;
+    const vertices: number[] = [];
+    const indices: number[] = [];
     
-    // More natural mountain colors: green valleys -> brown/gray slopes -> white peaks
-    if (eased < 0.3) {
-      // Valley: rich green
-      color.setHSL(0.35, 0.55, 0.25 + eased * 0.3);
-    } else if (eased < 0.7) {
-      // Mid slopes: transition to brown/gray rock
-      const midT = (eased - 0.3) / 0.4;
-      color.setHSL(0.12 - midT * 0.05, 0.35 - midT * 0.15, 0.35 + midT * 0.15);
-    } else {
-      // Peaks: snow white
-      const peakT = (eased - 0.7) / 0.3;
-      color.setHSL(0.0, 0.05, 0.6 + peakT * 0.35);
+    for (let i = 0; i < riverPoints.length - 1; i++) {
+      const p1 = riverPoints[i];
+      const p2 = riverPoints[i + 1];
+      
+      // Direction along river
+      const dx = p2.x - p1.x;
+      const dz = p2.z - p1.z;
+      const len = Math.sqrt(dx * dx + dz * dz);
+      
+      // Perpendicular for width
+      const nx = -dz / len * riverWidth / 2;
+      const nz = dx / len * riverWidth / 2;
+      
+      // Four corners of this river segment
+      const idx = vertices.length / 3;
+      
+      // Left side of start
+      vertices.push(p1.x + nx, -0.8, p1.z + nz);
+      // Right side of start
+      vertices.push(p1.x - nx, -0.8, p1.z - nz);
+      // Left side of end
+      vertices.push(p2.x + nx, -0.8, p2.z + nz);
+      // Right side of end
+      vertices.push(p2.x - nx, -0.8, p2.z - nz);
+      
+      // Two triangles
+      indices.push(idx, idx + 2, idx + 1);
+      indices.push(idx + 1, idx + 2, idx + 3);
     }
     
-    colors[idx * 3 + 0] = color.r;
-    colors[idx * 3 + 1] = color.g;
-    colors[idx * 3 + 2] = color.b;
-  }
-
-  let idx = 0;
-  for (let iz = 0; iz < resolution; iz++) {
-    for (let ix = 0; ix < resolution; ix++) {
-      const a = iz * (resolution + 1) + ix;
-      const b = a + 1;
-      const c = a + (resolution + 1);
-      const d = c + 1;
-      indices[idx++] = a;
-      indices[idx++] = c;
-      indices[idx++] = b;
-      indices[idx++] = c;
-      indices[idx++] = d;
-      indices[idx++] = b;
-    }
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
-  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-  geometry.computeVertexNormals();
-  return geometry;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    return geometry;
+  }, [riverPoints]);
+  
+  return (
+    <mesh geometry={riverGeometry}>
+      <meshStandardMaterial
+        color="#5DADE2"
+        transparent
+        opacity={0.85}
+        metalness={0.4}
+        roughness={0.2}
+      />
+    </mesh>
+  );
 };
 
+// Main terrain surface using the new terrain generation system
 const TerrainSurface = ({
   points,
   bounds,
   seed,
-  peakHeight = 25,
 }: {
   points: TerrainPoint[];
   bounds: TerrainBounds;
   seed: number;
-  peakHeight?: number;
 }) => {
-  const geometry = useMemo(() => buildTerrainGeometry(points, bounds, seed, peakHeight), [points, bounds, seed, peakHeight]);
+  const { geometry, riverPoints } = useMemo(() => {
+    const width = Math.max(bounds.maxX - bounds.minX, 80);
+    const depth = Math.max(bounds.maxZ - bounds.minZ, 80);
+    const terrainSize = Math.max(width, depth) * 1.3;
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+    
+    // Generate mountains from product positions
+    const { mountains, hills } = generateMountainsFromProducts(points, bounds);
+    
+    // Generate river through low areas
+    const riverPoints = generateRiverPath(mountains, {
+      minX: centerX - terrainSize / 2,
+      maxX: centerX + terrainSize / 2,
+      minZ: centerZ - terrainSize / 2,
+      maxZ: centerZ + terrainSize / 2,
+    });
+    
+    // Build terrain config
+    const config = {
+      width: terrainSize,
+      height: terrainSize,
+      resolution: TERRAIN_RESOLUTION,
+      mountains,
+      hills,
+      riverPoints,
+      seed,
+      circularBoundary: true,
+      boundaryRadius: terrainSize / 2 * 0.95,
+    };
+    
+    // Generate height grid and mesh
+    const heightGrid = buildHeightGrid(config);
+    const geometry = buildTerrainMesh(heightGrid, config);
+    
+    // Offset geometry to terrain center
+    geometry.translate(centerX, 0, centerZ);
+    
+    return { geometry, riverPoints: riverPoints.map(p => ({ x: p.x + centerX, z: p.z + centerZ })) };
+  }, [points, bounds, seed]);
 
   useEffect(() => {
     return () => {
@@ -281,14 +337,13 @@ const TerrainSurface = ({
     };
   }, [geometry]);
 
-  if (!geometry) {
-    return null;
-  }
-
   return (
-    <mesh geometry={geometry} receiveShadow castShadow>
-      <meshStandardMaterial vertexColors roughness={0.85} metalness={0.2} />
-    </mesh>
+    <group>
+      <mesh geometry={geometry} receiveShadow castShadow>
+        <meshStandardMaterial vertexColors roughness={0.8} metalness={0.15} />
+      </mesh>
+      <RiverMesh riverPoints={riverPoints} bounds={bounds} />
+    </group>
   );
 };
 
@@ -406,6 +461,116 @@ const HighlightMarkers = ({ points }: { points: TerrainPoint[] }) => (
   </group>
 );
 
+// Simple low-poly tree
+const LowPolyTree = ({ 
+  position, 
+  scale = 1, 
+  color = "#228B22" 
+}: { 
+  position: [number, number, number]; 
+  scale?: number; 
+  color?: string;
+}) => (
+  <group position={position} scale={scale}>
+    {/* Trunk */}
+    <mesh position={[0, 0.4, 0]}>
+      <cylinderGeometry args={[0.1, 0.15, 0.8, 6]} />
+      <meshStandardMaterial color="#8B4513" />
+    </mesh>
+    {/* Foliage - stacked cones */}
+    <mesh position={[0, 1.2, 0]}>
+      <coneGeometry args={[0.6, 1.2, 6]} />
+      <meshStandardMaterial color={color} />
+    </mesh>
+    <mesh position={[0, 1.8, 0]}>
+      <coneGeometry args={[0.45, 0.9, 6]} />
+      <meshStandardMaterial color={color} />
+    </mesh>
+    <mesh position={[0, 2.3, 0]}>
+      <coneGeometry args={[0.3, 0.6, 6]} />
+      <meshStandardMaterial color={color} />
+    </mesh>
+  </group>
+);
+
+// Forest decoration - places trees around the terrain
+const ForestDecoration = ({ bounds, seed }: { bounds: TerrainBounds; seed: number }) => {
+  const trees = useMemo(() => {
+    const treeList: Array<{
+      id: string;
+      position: [number, number, number];
+      scale: number;
+      color: string;
+    }> = [];
+    
+    const rand = mulberry32(seed + 999);
+    const width = bounds.maxX - bounds.minX;
+    const depth = bounds.maxZ - bounds.minZ;
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+    const radius = Math.max(width, depth) / 2 * 0.85;
+    
+    const treeColors = [
+      "#228B22", // Forest green
+      "#2E8B57", // Sea green
+      "#006400", // Dark green
+      "#32CD32", // Lime green
+      "#FF8C00", // Autumn orange
+      "#DC143C", // Autumn red
+    ];
+    
+    // Generate 40-60 trees
+    const numTrees = 40 + Math.floor(rand() * 20);
+    
+    for (let i = 0; i < numTrees; i++) {
+      // Random position within terrain bounds (polar coordinates for circular distribution)
+      const angle = rand() * Math.PI * 2;
+      const dist = (0.2 + rand() * 0.7) * radius; // 20-90% of radius
+      
+      const x = centerX + Math.cos(angle) * dist;
+      const z = centerZ + Math.sin(angle) * dist;
+      
+      // Height at terrain surface (approximation - in practice would sample terrain)
+      // For now, use a simple formula
+      const distFromCenter = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
+      const normalizedDist = distFromCenter / radius;
+      
+      // Trees on lower slopes (avoid peaks and water)
+      if (normalizedDist > 0.15 && normalizedDist < 0.8) {
+        const baseHeight = (1 - normalizedDist) * 8 + rand() * 2;
+        
+        // Skip if would be in water
+        if (baseHeight > 0.5) {
+          const scale = 0.6 + rand() * 0.8;
+          const colorIdx = Math.floor(rand() * treeColors.length);
+          
+          treeList.push({
+            id: `tree-${i}`,
+            position: [x, baseHeight, z],
+            scale,
+            color: treeColors[colorIdx],
+          });
+        }
+      }
+    }
+    
+    return treeList;
+  }, [bounds, seed]);
+  
+  return (
+    <group>
+      {trees.map((tree) => (
+        <LowPolyTree
+          key={tree.id}
+          position={tree.position}
+          scale={tree.scale}
+          color={tree.color}
+        />
+      ))}
+    </group>
+  );
+};
+
 const NarrationPanel = ({ payload }: { payload: TerrainPayload }) => {
   if (!payload.highlights.length) {
     return null;
@@ -470,12 +635,14 @@ function Scene({
 
   return (
     <Canvas shadows camera={{ position: cameraPosition, fov: 38 }}>
-      <color attach="background" args={["#030712"]} />
-      <ambientLight intensity={0.4} />
-      <directionalLight position={[25, 40, 10]} intensity={1.2} castShadow />
-      <pointLight position={[-20, 15, -10]} intensity={0.5} />
-      <Stars radius={80} depth={40} factor={4} fade speed={0.4} />
-      <TerrainSurface points={payload.points} bounds={bounds} seed={meshSeed} peakHeight={payload.meta?.peakHeight ?? 25} />
+      <color attach="background" args={["#87CEEB"]} />
+      <ambientLight intensity={0.55} />
+      <directionalLight position={[40, 60, 30]} intensity={1.4} castShadow />
+      <pointLight position={[-30, 25, -20]} intensity={0.4} color="#fff5e6" />
+      <hemisphereLight color="#87CEEB" groundColor="#228B22" intensity={0.3} />
+      <SkyDecoration bounds={bounds} seed={meshSeed} />
+      <TerrainSurface points={payload.points} bounds={bounds} seed={meshSeed} />
+      <ForestDecoration bounds={bounds} seed={meshSeed} />
       {/* Query path showing the journey through ranked products */}
       <QueryPath points={payload.points} visible={showQueryPath ?? true} />
       <ProductMarkers points={payload.points} onSelect={onSelect} />
@@ -488,8 +655,8 @@ function Scene({
         enablePan={true}
         enableZoom={true}
         enableRotate={true}
-        maxDistance={diag * 4}
-        minDistance={diag * 0.3}
+        maxDistance={diag * 5}
+        minDistance={diag * 0.25}
         maxPolarAngle={Math.PI / 2.05}
         enableDamping
         dampingFactor={0.05}
