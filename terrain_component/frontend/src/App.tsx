@@ -477,6 +477,7 @@ const ProductLabels = ({
     {points.map((point) => {
       const terrainHeight = sampleHeight(point.position[0], point.position[2]);
       const y = Math.max(terrainHeight, point.height) + 1.2;
+      const matchScore = Math.round((point.score ?? 0) * 100);
       return (
         <Billboard
           key={`label-${point.id}`}
@@ -491,7 +492,8 @@ const ProductLabels = ({
                 onSelect(point);
               }}
             >
-              {truncateLabel(point.name)}
+              <span className="product-name">{truncateLabel(point.name)}</span>
+              <span className="product-score">{matchScore}</span>
             </div>
           </Html>
         </Billboard>
@@ -753,6 +755,8 @@ const TerrainApp = (props: ComponentProps) => {
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0); // 0 = intro, 1-N = products, N+1 = outro
   const [focusPosition, setFocusPosition] = useState<[number, number, number] | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Get tour products from highlights
   const tourProducts = useMemo(() => {
@@ -851,8 +855,36 @@ const TerrainApp = (props: ComponentProps) => {
     Streamlit.setFrameHeight();
   }, [payload, props.width]);
 
+  // Fullscreen toggle handler
+  const toggleFullscreen = useCallback(() => {
+    if (!containerRef.current) return;
+    
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().then(() => {
+        setIsFullscreen(true);
+      }).catch((err) => {
+        console.error('Fullscreen error:', err);
+      });
+    } else {
+      document.exitFullscreen().then(() => {
+        setIsFullscreen(false);
+      }).catch((err) => {
+        console.error('Exit fullscreen error:', err);
+      });
+    }
+  }, []);
+
+  // Listen for fullscreen changes (e.g., user presses Escape)
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
   return (
-    <div className="terrain-shell">
+    <div className="terrain-shell" ref={containerRef}>
       <Scene 
         payload={payload} 
         onSelect={handleSelect}
@@ -863,6 +895,21 @@ const TerrainApp = (props: ComponentProps) => {
       />
       <NarrationPanel payload={payload} />
       <ControlIndicators visible={!tourActive} />
+      <button
+        className="fullscreen-btn"
+        onClick={toggleFullscreen}
+        title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+      >
+        {isFullscreen ? (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+          </svg>
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+          </svg>
+        )}
+      </button>
       <TourPanel
         tourActive={tourActive}
         currentStep={tourStep}

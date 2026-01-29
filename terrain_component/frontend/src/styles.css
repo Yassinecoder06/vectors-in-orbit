@@ -21,6 +21,43 @@ body,
   box-shadow: 0 40px 80px rgba(2, 6, 23, 0.6);
 }
 
+.terrain-shell:fullscreen {
+  border-radius: 0;
+  aspect-ratio: auto;
+  min-height: 100vh;
+  background: radial-gradient(circle at 20% 20%, rgba(17, 24, 39, 1), rgba(2, 6, 23, 1));
+}
+
+/* Fullscreen Toggle Button */
+.fullscreen-btn {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.5rem;
+  color: #e2e8f0;
+  cursor: pointer;
+  z-index: 200;
+  transition: all 0.2s ease;
+}
+
+.fullscreen-btn:hover {
+  background: rgba(30, 41, 59, 0.95);
+  border-color: rgba(148, 163, 184, 0.4);
+  transform: scale(1.05);
+}
+
+.fullscreen-btn:active {
+  transform: scale(0.95);
+}
+
 .canvas-overlay {
   position: absolute;
   inset: 0;
@@ -69,6 +106,28 @@ body,
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.product-name {
+  flex: 1;
+}
+
+.product-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff;
+  font-size: 1.8rem;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3);
 }
 
 /* Control Indicators */
