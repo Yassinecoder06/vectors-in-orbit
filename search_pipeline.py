@@ -23,8 +23,7 @@ import time
 from typing import List, Dict, Any, Optional
 
 from qdrant_client import QdrantClient, models
-from sentence_transformers import SentenceTransformer
-import torch
+
 from dotenv import load_dotenv
 import numpy as np
 from cf.fa_cf import get_fa_cf_scores
@@ -87,8 +86,7 @@ EXPECTED_VECTOR_SIZES = {
 #
 # Latency Impact: ~1500ms saved per query by avoiding model reload
 
-_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-logger.info("🚀 GPU Available: %s (Device: %s)", torch.cuda.is_available(), _DEVICE)
+
 
 class EmbeddingCache:
     """Singleton cache for the embedding model (NEVER reload on reruns)."""
@@ -103,13 +101,35 @@ class EmbeddingCache:
     def get_model(self):
         """Lazy-load model on first access, reuse thereafter."""
         if self._model is None:
+            import torch
+            from sentence_transformers import SentenceTransformer
+            
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info("🚀 GPU Available: %s (Device: %s)", torch.cuda.is_available(), self._device)
+            
             logger.info("📦 Loading SentenceTransformer (all-MiniLM-L6-v2)...")
-            self._model = SentenceTransformer("all-MiniLM-L6-v2", device=_DEVICE)
-            logger.info("✅ Model loaded on device: %s", _DEVICE)
+            self._model = SentenceTransformer("all-MiniLM-L6-v2", device=self._device)
+            logger.info("✅ Model loaded on device: %s", self._device)
         return self._model
 
+    @property
+    def device(self):
+        if self._model is None:
+            self.get_model()
+        return self._device
+
 _embedding_cache = EmbeddingCache()
-_EMBEDDING_MODEL = _embedding_cache.get_model()  # Get once at module load
+# LAZY LOAD: Don't load the model until first use
+# This prevents Streamlit from freezing on startup
+_EMBEDDING_MODEL = None
+
+
+def _get_embedding_model():
+    """Lazy-load the embedding model on first use."""
+    global _EMBEDDING_MODEL
+    if _EMBEDDING_MODEL is None:
+        _EMBEDDING_MODEL = _embedding_cache.get_model()
+    return _EMBEDDING_MODEL
 
 
 def get_qdrant_client() -> QdrantClient:
@@ -145,12 +165,14 @@ def embed_query(text: str, batch_size: int = 32) -> List[float]:
     Raises:
         ValueError: If embedding dimension is incorrect
     """
-    logger.info("⚡ Embedding query (GPU: %s)", _DEVICE == "cuda")
+    # logger.info("⚡ Embedding query (GPU: %s)", _DEVICE == "cuda") # Moved inside try block to access device lazily
     try:
-        embedding = _EMBEDDING_MODEL.encode(
+        model = _get_embedding_model()  # Lazy-load on first use
+        device = _embedding_cache.device
+        embedding = model.encode(
             text, 
             convert_to_numpy=True, 
-            device=_DEVICE,
+            device=device,
             show_progress_bar=False  # Prevent progress bar noise in logs
         )
         vec_list = embedding.tolist()

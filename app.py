@@ -18,17 +18,14 @@ from typing import List, Dict, Any, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 
+# Import Swipe Component
+from streamlit_swipecards import streamlit_swipecards
+
 # Import backend search function
 from search_pipeline import search_products, get_qdrant_client, PRODUCTS_COLLECTION
 from interaction_logger import log_interaction, get_interaction_stats_by_type
 
 # Import visualization functions
-from financial_semantic_viz import (
-    project_embeddings_umap,
-    visualize_financial_landscape,
-    determine_safety_colors,
-    export_products_for_visualization
-)
 
 # =============================================================================
 # Interaction Hooks
@@ -111,6 +108,101 @@ def on_purchase(product: Dict[str, Any], query: str = ""):
     except Exception as e:
         st.warning(f"Failed to log purchase: {e}")
 
+
+def _build_product_payload_full(product: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a complete product payload for interaction logging (handles both formats)."""
+    payload = product.get("payload", {}).copy()
+    if "id" not in payload and "product_id" not in payload:
+        product_id = product.get("id")
+        if product_id:
+            payload["id"] = product_id
+    return payload
+
+
+def load_discovery_queue():
+    """Fetch a batch of products from the backend based on current filters."""
+    user_context = build_user_context()
+    query = st.session_state.search_query
+    
+    if not query:
+        query = "trending"
+
+    try:
+        results = search_products(
+            user_id=user_context["user_id"],
+            query=query,
+            top_k=30,  # Fetch 30 for the swipe stack
+            debug_mode=False,
+            override_context=user_context,
+        )
+    except Exception as e:
+        st.error(f"Search error: {e}")
+        results = []
+    
+    # Filter out duplicates (already in cart)
+    cart_ids = {p.get("id") or p.get("payload", {}).get("product_id") for p in st.session_state.cart}
+    
+    new_items = []
+    for item in results:
+        it_id = item.get("id") or item.get("payload", {}).get("product_id")
+        if it_id not in cart_ids:
+            new_items.append(item)
+            
+    st.session_state.discovery_queue = new_items
+    st.session_state.current_index = 0
+    st.session_state.last_queue_query = query
+
+
+def process_swipe_result(result: str, product: Dict[str, Any]):
+    """Process the swipe result (right = like, left = pass)."""
+    user_context = build_user_context()
+
+    # Debug: log the raw result to understand what the component emits
+    st.write(f"DEBUG: swipe result={result}, type={type(result)}")
+
+    action = result
+    if isinstance(result, dict):
+        action = (
+            result.get("action")
+            or result.get("direction")
+            or result.get("swipe")
+            or result.get("decision")
+        )
+        if action is None and isinstance(result.get("like"), bool):
+            action = "right" if result.get("like") else "left"
+
+    # Normalize possible action values
+    if isinstance(action, str):
+        action = action.lower()
+        if action in {"like", "swiperight", "right", "r"}:
+            action = "right"
+        elif action in {"dislike", "swipeleft", "left", "l"}:
+            action = "left"
+    
+    if action == "right":
+        # Add to cart
+        st.session_state.cart.append(product)
+        log_interaction(
+            user_id=user_context["user_id"],
+            product_payload=_build_product_payload_full(product),
+            interaction_type="add_to_cart",
+            user_context=user_context,
+            query=st.session_state.search_query
+        )
+        st.toast("✅ Added to cart!", icon="🛒")
+        
+    elif action == "left":
+        # Log as view/pass
+        log_interaction(
+            user_id=user_context["user_id"],
+            product_payload=_build_product_payload_full(product),
+            interaction_type="view",
+            user_context=user_context,
+            query=st.session_state.search_query
+        )
+    
+    st.session_state.interaction_count += 1
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -121,6 +213,17 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+st.markdown("""
+<style>
+    .swipe-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin-top: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # User personas for quick selection
 USER_PERSONAS = {
@@ -245,6 +348,13 @@ def init_session_state():
         "search_query": "",
         "search_results": [],
         "has_searched": False,
+        # Swipe specific
+        "discovery_queue": [],
+        "cart": [],
+        "interaction_count": 0,
+        "view_mode": "Swipe",  # 'Swipe' or 'Cart'
+        "current_index": 0,
+        "last_queue_query": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -269,6 +379,44 @@ def render_sidebar():
     st.sidebar.title("🎛️ User Profile")
     st.sidebar.markdown("---")
     
+    # Navigation Switch
+    st.sidebar.subheader("Navigation")
+    mode = st.sidebar.radio(
+        "View Mode",
+        ["Swipe & Shop", "My Cart"],
+        index=0 if st.session_state.view_mode == "Swipe" else 1,
+        format_func=lambda x: f"🛒 Cart ({len(st.session_state.cart)})" if x == "My Cart" else "🔍 Swipe & Shop"
+    )
+    if mode == "Swipe & Shop":
+        st.session_state.view_mode = "Swipe"
+    else:
+        st.session_state.view_mode = "Cart"
+    
+    st.sidebar.markdown("---")
+
+    # Search input
+    st.sidebar.subheader("🔍 Search Products")
+    def _trigger_sidebar_search():
+        query = st.session_state.get("sidebar_search_input", "").strip()
+        st.session_state.search_query = query
+        st.session_state.discovery_queue = []
+        st.session_state.current_index = 0
+        with st.spinner("🔍 Searching..."):
+            load_discovery_queue()
+
+    st.sidebar.text_input(
+        "What are you looking for?",
+        value=st.session_state.search_query,
+        placeholder="e.g., running shoes",
+        key="sidebar_search_input",
+        label_visibility="collapsed"
+    )
+
+    if st.sidebar.button("Search", key="sidebar_search_button", type="primary", use_container_width=True):
+        _trigger_sidebar_search()
+
+    st.sidebar.markdown("---")
+
     # Load options from dataset
     brand_options, category_options = load_brand_category_options()
     
@@ -287,6 +435,7 @@ def render_sidebar():
             preset = USER_PERSONAS[persona]
             st.session_state.available_balance = float(preset["balance"])
             st.session_state.credit_limit = float(preset["credit"])
+            st.session_state.discovery_queue = [] # Reset queue on persona change
     
     st.sidebar.markdown("### 💰 Financial Context")
     
@@ -660,370 +809,256 @@ def perform_search(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         return []
 
 
-def render_financial_landscape(user_id: str, risk_tolerance: str = "Medium", top_k: int = 50):
-    """Render the financial landscape visualization using real Qdrant data."""
-    try:
-        with st.spinner("📊 Loading financial landscape..."):
-            # Get Qdrant client
-            client = get_qdrant_client()
-            
-            # Export products for visualization with custom risk tolerance
-            products_dict = export_products_for_visualization(
-                client, 
-                user_id, 
-                top_k=top_k,
-                risk_tolerance=risk_tolerance  # Pass UI risk tolerance
-            )
-            
-            if not products_dict:
-                st.warning("No products found. Check Qdrant collections.")
-                return
-            
-            # Extract vectors and metadata
-            product_ids = list(products_dict.keys())
-            embeddings = np.array([products_dict[pid]['embedding'] for pid in product_ids])
-            
-            # Project to 2D
-            coords = project_embeddings_umap(embeddings)
-            
-            # Prepare metadata
-            finance_metadata = {
-                'prices': np.array([products_dict[pid]['price'] for pid in product_ids]),
-                'user_budgets': np.array([products_dict[pid]['user_budget'] for pid in product_ids]),
-                'risk_tolerances': np.array([products_dict[pid]['user_risk_tolerance'] for pid in product_ids]),
-                'final_scores': np.array([products_dict[pid]['final_score'] for pid in product_ids])
-            }
-            
-            # Create visualization
-            fig, ax = plt.subplots(figsize=(14, 10), facecolor='white')
-            
-            # Classify products by financial safety
-            colors = []
-            sizes = []
-            
-            for i in range(len(product_ids)):
-                price = finance_metadata['prices'][i]
-                budget = finance_metadata['user_budgets'][i]
-                tolerance = finance_metadata['risk_tolerances'][i]
-                final_score = finance_metadata['final_scores'][i]
-                
-                # Calculate metrics
-                affordability_ratio = price / budget if budget > 0 else 1.0
-                risk_safety = abs(affordability_ratio - tolerance)
-                
-                # Color assignment logic
-                if affordability_ratio < 0.7 and risk_safety < 0.2:
-                    color = '#2ecc71'  # GREEN: Safe and affordable
-                elif affordability_ratio < 0.7 and risk_safety < 0.5:
-                    color = '#f39c12'  # ORANGE: Affordable but risky
-                else:
-                    color = '#e74c3c'  # RED: Unaffordable or too risky
-                
-                colors.append(color)
-                size = 100 + (final_score * 400)
-                sizes.append(size)
-            
-            # Plot
-            ax.scatter(coords[:, 0], coords[:, 1], 
-                      c=colors, s=sizes, alpha=0.7, 
-                      edgecolors='black', linewidth=0.5)
-            
-            # Add legend
-            from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor='#2ecc71', edgecolor='black', label='Safe & Affordable (Recommended)'),
-                Patch(facecolor='#f39c12', edgecolor='black', label='Affordable but Risky (Filtered)'),
-                Patch(facecolor='#e74c3c', edgecolor='black', label='Unaffordable or Too Risky (Hidden)'),
-            ]
-            ax.legend(handles=legend_elements, loc='upper right', fontsize=11, framealpha=0.95)
-            
-            # Styling
-            ax.set_xlabel('Semantic Similarity (Dimension 1)', fontsize=12, fontweight='bold')
-            ax.set_ylabel('Semantic Similarity (Dimension 2)', fontsize=12, fontweight='bold')
-            ax.set_title('Financial Discovery Landscape', fontsize=14, fontweight='bold', pad=20)
-            ax.grid(True, alpha=0.2, linestyle='--')
-            ax.set_facecolor('#f8f9fa')
-            
-            # Display plot
-            st.pyplot(fig, use_container_width=True)
-            
-            # Display statistics
-            safety_colors = determine_safety_colors(finance_metadata)
-            green_count = np.sum(safety_colors == 'green')
-            orange_count = np.sum(safety_colors == 'orange')
-            red_count = np.sum(safety_colors == 'red')
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Safe & Affordable", f"{green_count}")
-            with col2:
-                st.metric("Risky/Stretched", f"{orange_count}")
-            with col3:
-                st.metric("Unsafe", f"{red_count}")
-            with col4:
-                avg_score = np.mean(finance_metadata['final_scores'])
-                st.metric("Avg Score", f"{avg_score:.2f}")
-            
-            # Additional metrics
-            col1, col2 = st.columns(2)
-            with col1:
-                st.info(f"**Budget:** ${finance_metadata['user_budgets'][0]:,.2f}")
-            with col2:
-                st.info(f"**Avg Product Price:** ${np.mean(finance_metadata['prices']):,.2f}")
-            
-    except Exception as e:
-        st.error(f"Error loading financial landscape: {e}")
+def render_swipe_ui():
+    """Render the Tinder-like swipe interface."""
+    st.title("🔥 Discover Products")
+    st.caption("Swipe **Right** ➡️ to Add to Cart | Swipe **Left** ⬅️ to Skip")
 
-
-def on_search_change():
-    """Callback when search input changes (Enter key pressed)."""
-    query = st.session_state.search_input
-    if query and query.strip():
-        st.session_state.search_query = query
-        top_k = st.session_state.get("top_k_slider", 5)
-        with st.spinner("🔍 Searching across products..."):
-            st.session_state.search_results = perform_search(query, top_k)
-            st.session_state.has_searched = True
-
-
-def render_main_area():
-    """Render main search interface and results."""
-    st.title("🛒 Context-Aware FinCommerce Engine")
-    st.markdown(
-        "Personalized product recommendations powered by **semantic search**, "
-        "**affordability scoring**, and **preference matching**."
-    )
-    
-    # Search input section
-    col1, col2 = st.columns([4, 1])
-    
-    with col1:
-        query = st.text_input(
-            "🔍 What are you looking for?",
-            value=st.session_state.search_query,
-            placeholder="e.g., 'comfortable running shoes for marathon training'",
-            label_visibility="collapsed",
-            key="search_input",
-            on_change=on_search_change
-        )
-    
-    with col2:
-        search_clicked = st.button("Search", type="primary", use_container_width=True)
-    
-    # Number of results selector
-    top_k = st.slider("Number of recommendations", 3, 10, 5, key="top_k_slider")
-    
-    # Execute search
-    if search_clicked and query.strip():
-        st.session_state.search_query = query
-        with st.spinner("🔍 Searching across products..."):
-            st.session_state.search_results = perform_search(query, top_k)
-            st.session_state.has_searched = True
+    # Remaining counter (from the current 30-item queue)
+    if st.session_state.discovery_queue:
+        remaining = len(st.session_state.discovery_queue)
+        st.info(f"📚 Remaining in this batch: {remaining} / {len(st.session_state.discovery_queue)}")
     
     st.markdown("---")
     
-    # Display results
-    if st.session_state.has_searched:
-        results = st.session_state.search_results
-        
-        if results:
-            # Create tabs for different views
-            tab1, tab2 = st.tabs(["📊 Recommendations", "🗺️ Financial Landscape"])
-            
-            with tab1:
-                st.markdown(f"### 🎁 Top {len(results)} Recommendations")
-                
-                # Summary metrics
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    avg_score = sum(r.get("final_score", 0) for r in results) / len(results)
-                    st.metric("Avg Match", f"{avg_score:.0%}")
-                with col2:
-                    avg_price = sum(r.get("payload", {}).get("price", 0) for r in results) / len(results)
-                    st.metric("Avg Price", f"${avg_price:,.0f}")
-                with col3:
-                    in_budget = sum(
-                        1 for r in results 
-                        if r.get("affordability_score", 0) >= 0.5
-                    )
-                    st.metric("In Budget", f"{in_budget}/{len(results)}")
-                with col4:
-                    pref_match = sum(
-                        1 for r in results 
-                        if r.get("preference_score", 0) >= 1.0
-                    )
-                    st.metric("Pref Match", f"{pref_match}/{len(results)}")
-                
-                st.markdown("---")
-                
-                # Render product cards
-                for idx, product in enumerate(results, start=1):
-                    render_product_card(product, idx)
-            
-            with tab2:
-                st.markdown("### 🗺️ Financial Discovery Landscape")
-                st.markdown(
-                    "Visualization of **your search results** positioned by semantic similarity. "
-                    "**Green dots** = safe & affordable. **Orange dots** = risky/stretched. "
-                    "**Red dots** = unsafe/unaffordable (filtered from recommendations)."
-                )
-                
-                # Extract metadata from search results and re-fetch vectors
-                try:
-                    if len(results) < 3:
-                        st.warning("Need at least 3 products for visualization. Try searching for more results.")
-                    else:
-                        product_ids = [r.get("id") for r in results]
-                        prices = []
-                        final_scores = []
-                        
-                        user_context = build_user_context()
-                        total_budget = user_context["available_balance"] + user_context["credit_limit"]
-                        
-                        # Map risk tolerance to numeric
-                        risk_tolerance_map = {"Low": 0.2, "Medium": 0.5, "High": 0.8}
-                        user_risk_tolerance = risk_tolerance_map.get(user_context["risk_tolerance"], 0.5)
-                        
-                        for result in results:
-                            payload = result.get("payload", {})
-                            prices.append(payload.get("price", 0.0))
-                            final_scores.append(result.get("final_score", 0.0))
-                        
-                        # Fetch vectors for these products from Qdrant
-                        with st.spinner("Fetching product embeddings..."):
-                            client = get_qdrant_client()
-                            points = client.retrieve(
-                                collection_name=PRODUCTS_COLLECTION,
-                                ids=product_ids,
-                                with_vectors=True
-                            )
-                            
-                            embeddings = []
-                            for point in points:
-                                if point.vector is not None:
-                                    embeddings.append(point.vector)
-                        
-                        if len(embeddings) > 0:
-                            embeddings_array = np.array(embeddings)
-                            
-                            # Project to 2D
-                            coords = project_embeddings_umap(embeddings_array)
-                            
-                            # Prepare metadata
-                            finance_metadata = {
-                                'prices': np.array(prices),
-                                'user_budgets': np.array([total_budget] * len(prices)),
-                                'risk_tolerances': np.array([user_risk_tolerance] * len(prices)),
-                                'final_scores': np.array(final_scores)
-                            }
-                            
-                            # Create visualization
-                            fig, ax = plt.subplots(figsize=(14, 10), facecolor='white')
-                            
-                            # Classify products by financial safety
-                            colors = []
-                            sizes = []
-                            
-                            for i in range(len(prices)):
-                                price = finance_metadata['prices'][i]
-                                budget = finance_metadata['user_budgets'][i]
-                                tolerance = finance_metadata['risk_tolerances'][i]
-                                final_score = finance_metadata['final_scores'][i]
-                                
-                                # Calculate metrics
-                                affordability_ratio = price / budget if budget > 0 else 1.0
-                                risk_safety = abs(affordability_ratio - tolerance)
-                                
-                                # Color assignment logic
-                                if affordability_ratio < 0.7 and risk_safety < 0.2:
-                                    color = '#2ecc71'  # GREEN: Safe and affordable
-                                elif affordability_ratio < 0.7 and risk_safety < 0.5:
-                                    color = '#f39c12'  # ORANGE: Affordable but risky
-                                else:
-                                    color = '#e74c3c'  # RED: Unaffordable or too risky
-                                
-                                colors.append(color)
-                                size = 100 + (final_score * 400)
-                                sizes.append(size)
-                            
-                            # Plot
-                            ax.scatter(coords[:, 0], coords[:, 1], 
-                                      c=colors, s=sizes, alpha=0.7, 
-                                      edgecolors='black', linewidth=0.5)
-                            
-                            # Add legend
-                            from matplotlib.patches import Patch
-                            legend_elements = [
-                                Patch(facecolor='#2ecc71', edgecolor='black', label='Safe & Affordable'),
-                                Patch(facecolor='#f39c12', edgecolor='black', label='Affordable but Risky'),
-                                Patch(facecolor='#e74c3c', edgecolor='black', label='Unaffordable/Too Risky'),
-                            ]
-                            ax.legend(handles=legend_elements, loc='upper right', fontsize=11, framealpha=0.95)
-                            
-                            # Styling
-                            ax.set_xlabel('Semantic Similarity (Dimension 1)', fontsize=12, fontweight='bold')
-                            ax.set_ylabel('Semantic Similarity (Dimension 2)', fontsize=12, fontweight='bold')
-                            ax.set_title(f'Financial Landscape: "{st.session_state.search_query}"', fontsize=14, fontweight='bold', pad=20)
-                            ax.grid(True, alpha=0.2, linestyle='--')
-                            ax.set_facecolor('#f8f9fa')
-                            
-                            # Display plot
-                            st.pyplot(fig, use_container_width=True)
-                            
-                            # Display statistics
-                            safety_colors = determine_safety_colors(finance_metadata)
-                            green_count = np.sum(safety_colors == 'green')
-                            orange_count = np.sum(safety_colors == 'orange')
-                            red_count = np.sum(safety_colors == 'red')
-                            
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric("🟢 Safe & Affordable", f"{green_count}")
-                            with col2:
-                                st.metric("🟠 Risky/Stretched", f"{orange_count}")
-                            with col3:
-                                st.metric("🔴 Unsafe", f"{red_count}")
-                            with col4:
-                                avg_score = np.mean(finance_metadata['final_scores'])
-                                st.metric("Avg Score", f"{avg_score:.2f}")
-                            
-                            # Additional metrics
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.info(f"**Your Budget:** ${total_budget:,.2f}")
-                            with col2:
-                                st.info(f"**Avg Product Price:** ${np.mean(finance_metadata['prices']):,.2f}")
-                        else:
-                            st.warning("No product embeddings available for visualization.")
-                        
-                except Exception as e:
-                    st.error(f"Error creating visualization: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
-        else:
-            st.info(
-                "😕 No products found matching your criteria.\n\n"
-                "Try:\n"
-                "- Broadening your search terms\n"
-                "- Increasing your budget\n"
-                "- Removing preference filters"
-            )
-    else:
-        # Welcome state
-        st.markdown(
-            """
-            ### 👋 Welcome!
-            
-            Enter a search query above to discover personalized product recommendations.
-            
-            **How it works:**
-            1. 🔍 **Semantic Search** - We understand your intent, not just keywords
-            2. 💰 **Affordability Scoring** - Products ranked by your budget
-            3. ❤️ **Preference Matching** - Your favorite brands & categories prioritized
-            
-            Configure your profile in the sidebar to personalize results!
-            """
+    # Reload queue if empty
+    if not st.session_state.discovery_queue:
+        with st.spinner("Curating your feed..."):
+            load_discovery_queue()
+    
+    if not st.session_state.discovery_queue:
+        st.warning("No products found for your criteria. Try adjusting filters!")
+        if st.button("Reset Filters"):
+            st.session_state.preferred_brands = []
+            st.session_state.preferred_categories = []
+            st.session_state.search_query = ""
+            st.rerun()
+        return
+
+    # Handle exhausted queue
+    if st.session_state.current_index >= len(st.session_state.discovery_queue):
+        st.info("No more products — refine your search")
+        return
+
+    # Build remaining cards as a stack
+    remaining_products = st.session_state.discovery_queue[st.session_state.current_index:]
+    if not remaining_products:
+        st.info("No more products — refine your search")
+        return
+
+    # Get Top Card (front of stack)
+    product = remaining_products[0]
+    payload = product.get("payload", {})
+    
+    # Prepare details for card
+    name = payload.get("name", "Unknown")
+    price = payload.get("price", 0)
+    final_score = product.get("final_score", 0.0)
+    brand = payload.get("brand", "Unknown")
+    
+    # Determine match quality text
+    match_text = "N/A"
+    match_emoji = "🤔"
+    if final_score > 0.8:
+        match_text = "Perfect Match"
+        match_emoji = "🌟"
+    elif final_score > 0.6:
+        match_text = "Good Match"
+        match_emoji = "👍"
+    elif final_score > 0.4:
+        match_text = "Potential"
+        match_emoji = "💭"
+    
+    categories = payload.get("categories", [])
+    if not isinstance(categories, list):
+        categories = [categories] if categories else []
+    category = categories[0] if categories else "General"
+
+    description_text = (
+        f"**{name}**\n\n"
+        f"Price: **${price:,.2f}**\n"
+        f"Brand: **{brand}**\n"
+        f"Category: **{category}**\n"
+        f"Match: {match_emoji} {match_text} ({final_score:.0%})\n\n"
+        f"{payload.get('description', '')[:150]}..."
+    )
+    
+    # Prepare stack cards
+    cards = []
+    for idx, p in enumerate(remaining_products):
+        p_payload = p.get("payload", {})
+        p_name = p_payload.get("name", "Unknown")
+        p_price = p_payload.get("price", 0)
+        p_final_score = p.get("final_score", 0.0)
+        p_brand = p_payload.get("brand", "Unknown")
+        p_categories = p_payload.get("categories", [])
+        if not isinstance(p_categories, list):
+            p_categories = [p_categories] if p_categories else []
+        p_category = p_categories[0] if p_categories else "General"
+        p_match_text = "N/A"
+        p_match_emoji = "🤔"
+        if p_final_score > 0.8:
+            p_match_text = "Perfect Match"
+            p_match_emoji = "🌟"
+        elif p_final_score > 0.6:
+            p_match_text = "Good Match"
+            p_match_emoji = "👍"
+        elif p_final_score > 0.4:
+            p_match_text = "Potential"
+            p_match_emoji = "💭"
+
+        p_description_text = (
+            f"**{p_name}**\n\n"
+            f"Price: **${p_price:,.2f}**\n"
+            f"Brand: **{p_brand}**\n"
+            f"Category: **{p_category}**\n"
+            f"Match: {p_match_emoji} {p_match_text} ({p_final_score:.0%})\n\n"
+            f"{p_payload.get('description', '')[:150]}..."
         )
+
+        cards.append({
+            "id": p.get("id") or p_payload.get("product_id") or f"idx_{st.session_state.current_index + idx}",
+            "name": p_brand,
+            "description": p_description_text,
+            "image": p_payload.get("image_url", "https://via.placeholder.com/400x400?text=No+Image"),
+        })
+    
+    # Unique key for React component to reset on new card
+    current_key = f"swipe_{product.get('id', 'u')}_{st.session_state.interaction_count}"
+    
+    # Render Swipe Component (stacked cards)
+    result = streamlit_swipecards(
+        cards=cards,
+        key=current_key
+    )
+    
+    if result:
+        # Resolve swiped product from result or fallback to top card
+        swiped_product = product
+        if isinstance(result, dict):
+            swiped_id = result.get("id") or result.get("card", {}).get("id")
+            if swiped_id:
+                for p in remaining_products:
+                    p_id = p.get("id") or p.get("payload", {}).get("product_id")
+                    if str(p_id) == str(swiped_id):
+                        swiped_product = p
+                        break
+
+        process_swipe_result(result, swiped_product)
+
+        # Remove swiped product from queue to keep stack accurate
+        swiped_id = swiped_product.get("id") or swiped_product.get("payload", {}).get("product_id")
+        st.session_state.discovery_queue = [
+            p for p in st.session_state.discovery_queue
+            if (p.get("id") or p.get("payload", {}).get("product_id")) != swiped_id
+        ]
+        st.rerun()
+
+    # Click-to-view details (logs click interaction)
+    details_key = f"details_{product.get('id', 'u')}_{st.session_state.current_index}"
+    if details_key not in st.session_state:
+        st.session_state[details_key] = False
+
+    if st.button("🔎 View details & why recommended", key=f"details_btn_{details_key}"):
+        st.session_state[details_key] = True
+        on_product_click(product, st.session_state.search_query)
+
+    if st.session_state[details_key]:
+        st.markdown("### Product Details")
+        st.write(payload.get("description", "No description available"))
+        st.markdown("### Why We Recommended This")
+        explanations = product.get("explanations", [])
+        if explanations:
+            for i, exp in enumerate(explanations, 1):
+                st.write(f"{i}. {exp}")
+        else:
+            st.caption("No explanation available.")
+        st.markdown("---")
+        
+    # Show detailed explanation below
+    with st.expander("🔍 See Why We Picked This For You", expanded=False):
+        render_explanation(
+            product.get("semantic_score", 0.0),
+            product.get("affordability_score", 0.0),
+            product.get("preference_score", 0.0),
+            product.get("collaborative_score", 0.0),
+            product.get("popularity_score", 0.0),
+            payload,
+        )
+
+
+def render_cart_ui():
+    """Render the shopping cart view."""
+    st.title(f"🛒 My Cart ({len(st.session_state.cart)})")
+    
+    if not st.session_state.cart:
+        st.info("Your cart is empty.")
+        if st.button("Start Swiping"):
+            st.session_state.view_mode = "Swipe"
+            st.rerun()
+        return
+
+    total = 0.0
+    items_to_delete = []
+    
+    for i, item in enumerate(st.session_state.cart):
+        payload = item.get("payload", {})
+        price = payload.get("price", 0.0)
+        total += price
+        
+        with st.container():
+            c1, c2, c3 = st.columns([1, 4, 1])
+            with c1:
+                img_url = payload.get("image_url", "")
+                if img_url:
+                    st.image(img_url, width=80)
+            with c2:
+                st.subheader(payload.get("name", "Unknown"))
+                st.caption(f"{payload.get('brand', 'N/A')} - ${price:,.2f}")
+            with c3:
+                if st.button("❌ Remove", key=f"del_{i}"):
+                    items_to_delete.append(i)
+        st.divider()
+    
+    # Delete items in reverse order to preserve indices
+    for i in reversed(items_to_delete):
+        st.session_state.cart.pop(i)
+    
+    if items_to_delete:
+        st.rerun()
+    
+    st.markdown(f"## Total: ${total:,.2f}")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("← Continue Shopping", use_container_width=True):
+            st.session_state.view_mode = "Swipe"
+            st.rerun()
+    
+    with col2:
+        if st.button("💳 Checkout", type="primary", use_container_width=True):
+            user_context = build_user_context()
+            for item in st.session_state.cart:
+                log_interaction(
+                    user_id=user_context["user_id"],
+                    product_payload=_build_product_payload_full(item),
+                    interaction_type="purchase",
+                    user_context=user_context
+                )
+            st.session_state.cart = []
+            st.balloons()
+            st.success("🎉 Purchase Complete! Thank you!")
+            time.sleep(2)
+            st.rerun()
+
+
+def render_main_area():
+    """Render main area based on current view mode."""
+    if st.session_state.view_mode == "Swipe":
+        render_swipe_ui()
+    else:
+        render_cart_ui()
 
 
 def main():

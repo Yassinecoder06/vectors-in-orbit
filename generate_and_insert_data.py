@@ -478,7 +478,7 @@ def main():
     client = get_qdrant_client()
     
     # Load ALL product data (no limit - use real data only)
-    products_source = load_product_data("data/all_products_payload.json", limit=5000)
+    products_source = load_product_data("data/products_normalized.json", limit=4000)
     print(f"Loaded {len(products_source)} products from JSON")
 
     # A) Products (real data, no synthetic generation)
