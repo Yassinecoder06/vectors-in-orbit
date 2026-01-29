@@ -508,9 +508,13 @@ def build_search_result_terrain_payload(
     """
     Build terrain payload from search results for 3D visualization.
     
+    Products are positioned based on their match score:
+    - Best matches (highest scores) are placed at the mountain peak (center, high)
+    - Worse matches are placed further down the slopes
+    
     Args:
         results: Search results from search_pipeline
-        coords: Optional 2D coordinates (if None, generates grid positions)
+        coords: Optional 2D coordinates (if None, generates positions based on rank)
         user_risk_tolerance: User's risk tolerance (0.0-1.0)
         budget_override: Override budget for affordability calculations
         random_seed: Random seed for terrain generation
@@ -526,47 +530,34 @@ def build_search_result_terrain_payload(
         return None
     
     points = []
-    
-    # Generate positions if coords not provided
     n_products = len(results)
-    if coords is None:
-        # Create a grid-like distribution with some randomness
-        grid_size = int(np.ceil(np.sqrt(n_products)))
-        positions = []
-        for i in range(n_products):
-            row = i // grid_size
-            col = i % grid_size
-            # Normalize to -1 to 1 range with some jitter
-            x = (col / max(grid_size - 1, 1)) * 2 - 1 + np.random.uniform(-0.1, 0.1)
-            y = (row / max(grid_size - 1, 1)) * 2 - 1 + np.random.uniform(-0.1, 0.1)
-            positions.append([x, y])
-        coords = np.array(positions)
     
-    # Normalize coords to terrain scale (-50 to 50)
-    if coords.shape[0] > 0:
-        coords_min = coords.min(axis=0)
-        coords_max = coords.max(axis=0)
-        coords_range = coords_max - coords_min
-        coords_range[coords_range == 0] = 1  # Avoid division by zero
-        normalized_coords = (coords - coords_min) / coords_range * 80 - 40  # Scale to -40 to 40
-    else:
-        normalized_coords = coords
+    # Sort results by final_score (best match first) to assign positions
+    sorted_results = sorted(enumerate(results), key=lambda x: x[1].get("final_score", 0), reverse=True)
     
+    # Calculate min/max prices first
     min_price = float('inf')
     max_price = 0
-    
-    for i, result in enumerate(results):
-        payload = result.get("payload", {})
-        price = payload.get("price", 0.0)
+    for _, result in sorted_results:
+        price = result.get("payload", {}).get("price", 0.0)
         min_price = min(min_price, price)
         max_price = max(max_price, price)
+    
+    if min_price == float('inf'):
+        min_price = 0
+    
+    # Position products in concentric rings from center (peak) outward
+    # Best match at center/peak, worse matches spread outward in rings
+    for rank, (original_idx, result) in enumerate(sorted_results):
+        payload = result.get("payload", {})
+        price = payload.get("price", 0.0)
         final_score = result.get("final_score", 0.5)
         
         # Calculate affordability color
         if budget_override and budget_override > 0:
             affordability_ratio = price / budget_override
         else:
-            affordability_ratio = 0.5  # Default to medium if no budget
+            affordability_ratio = 0.5
         
         risk_safety = abs(affordability_ratio - user_risk_tolerance)
         
@@ -578,20 +569,29 @@ def build_search_result_terrain_payload(
         else:
             color = "#e74c3c"  # RED: Unaffordable or too risky
         
-        # Get position from coords
-        if i < len(normalized_coords):
-            x, z = normalized_coords[i]
-        else:
-            x, z = np.random.uniform(-40, 40), np.random.uniform(-40, 40)
+        # Position based on rank: best matches near center (peak), worse matches further out
+        # Use spiral/ring pattern so higher ranked = closer to center
+        rank_normalized = rank / max(n_products - 1, 1)  # 0 = best, 1 = worst
         
-        # Calculate height based on final_score (higher score = higher on terrain)
-        height = float(final_score) * 18
+        # Distance from center increases with worse rank
+        # Best match (rank 0) is at center, worst is at edge
+        distance = rank_normalized * 35  # Max distance of 35 units from center
+        
+        # Angle around the center (spiral pattern)
+        angle = rank * 2.4 + np.random.uniform(-0.3, 0.3)  # Golden angle approximation + jitter
+        
+        x = distance * np.cos(angle) + np.random.uniform(-2, 2)
+        z = distance * np.sin(angle) + np.random.uniform(-2, 2)
+        
+        # Height based on score - best matches are highest (mountain peak)
+        # Scale height: best match = 20, worst = 2
+        height = 2 + (1 - rank_normalized) * 18  # Higher rank = higher position
         
         # Price normalized for size calculations
         price_normalized = (price - min_price) / max(max_price - min_price, 1) if max_price > min_price else 0.5
         
         point_data = {
-            "id": str(result.get("id", f"product_{i}")),
+            "id": str(result.get("id", f"product_{rank}")),
             "name": payload.get("name", "Unknown Product"),
             "price": float(price),
             "price_normalized": price_normalized,
@@ -603,17 +603,17 @@ def build_search_result_terrain_payload(
             "color": color,
             "height": height,
             "risk_tolerance": user_risk_tolerance,
-            "position": [float(x), height, float(z)]  # [x, y, z] array format
+            "rank": rank + 1,  # 1-indexed rank for display
+            "position": [float(x), height, float(z)]
         }
         points.append(point_data)
     
-    # Create highlights from top-scoring products
-    sorted_points = sorted(points, key=lambda p: p["score"], reverse=True)
+    # Create highlights from top-scoring products (points already sorted by rank, first = best)
     highlights = []
-    for idx, point in enumerate(sorted_points[:min(7, len(sorted_points))]):
+    for idx, point in enumerate(points[:min(7, len(points))]):
         highlights.append({
             "id": point["id"],
-            "label": f"#{idx + 1} {point['name'][:20]}..." if len(point['name']) > 20 else f"#{idx + 1} {point['name']}",
+            "label": f"#{point['rank']} {point['name'][:18]}..." if len(point['name']) > 18 else f"#{point['rank']} {point['name']}",
             "position": point["position"],
             "price": point["price"],
             "brand": point["brand"],
@@ -641,7 +641,7 @@ def build_search_result_terrain_payload(
                 "maxZ": max(zs) if zs else 20,
             },
             "price_range": {"min": min_price, "max": max_price},
-            "height_scale": 18,
+            "height_scale": 20,
         }
     }
 
