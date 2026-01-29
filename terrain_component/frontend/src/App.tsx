@@ -7,6 +7,9 @@ import CameraFocus from "./CameraFocus";
 import ControlIndicators from "./ControlIndicators";
 import TourPanel from "./TourPanel";
 import QueryPath from "./QueryPath";
+import FilterPanel, { FilterState, getDefaultFilters, applyFilters } from "./FilterPanel";
+import ComparisonPanel from "./ComparisonPanel";
+import ProductPreview from "./ProductPreview";
 import {
   generateMountainsFromProducts,
   generateRiverPath,
@@ -468,10 +471,12 @@ const ProductLabels = ({
   points,
   onSelect,
   sampleHeight,
+  onHover,
 }: {
   points: TerrainPoint[];
   onSelect: (point: TerrainPoint) => void;
   sampleHeight: HeightSampler;
+  onHover?: (point: TerrainPoint | null, event?: React.MouseEvent) => void;
 }) => (
   <group>
     {points.map((point) => {
@@ -491,6 +496,8 @@ const ProductLabels = ({
                 event.stopPropagation();
                 onSelect(point);
               }}
+              onMouseEnter={(event) => onHover?.(point, event)}
+              onMouseLeave={() => onHover?.(null)}
             >
               <span className="product-name">{truncateLabel(point.name)}</span>
               <span className="product-score">{matchScore}</span>
@@ -645,14 +652,18 @@ const NarrationPanel = ({ payload }: { payload: TerrainPayload }) => {
 
 function Scene({
   payload,
+  filteredPoints,
   onSelect,
+  onHover,
   focusPosition,
   onFocusComplete,
   showQueryPath,
   terrainData,
 }: {
   payload: TerrainPayload;
+  filteredPoints: TerrainPoint[];
   onSelect: (point: TerrainPoint) => void;
+  onHover?: (point: TerrainPoint | null, event?: React.MouseEvent) => void;
   focusPosition: [number, number, number] | null;
   onFocusComplete?: () => void;
   showQueryPath?: boolean;
@@ -701,10 +712,10 @@ function Scene({
       <TerrainSurface geometry={geometry} riverPoints={riverPoints} bounds={bounds} />
       <ForestDecoration bounds={bounds} seed={meshSeed} />
       {/* Query path showing the journey through ranked products */}
-      <QueryPath points={payload.points} visible={showQueryPath ?? true} sampleHeight={sampleHeight} />
-      <ProductMarkers points={payload.points} onSelect={onSelect} sampleHeight={sampleHeight} />
-      <ProductBillboards points={payload.points} onSelect={onSelect} sampleHeight={sampleHeight} />
-      <ProductLabels points={payload.points} onSelect={onSelect} sampleHeight={sampleHeight} />
+      <QueryPath points={filteredPoints} visible={showQueryPath ?? true} sampleHeight={sampleHeight} />
+      <ProductMarkers points={filteredPoints} onSelect={onSelect} sampleHeight={sampleHeight} />
+      <ProductBillboards points={filteredPoints} onSelect={onSelect} sampleHeight={sampleHeight} />
+      <ProductLabels points={filteredPoints} onSelect={onSelect} sampleHeight={sampleHeight} onHover={onHover} />
       <HighlightMarkers points={highlightPoints} />
       <OrbitControls
         ref={orbitControlsRef as any}
@@ -757,6 +768,26 @@ const TerrainApp = (props: ComponentProps) => {
   const [focusPosition, setFocusPosition] = useState<[number, number, number] | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Filter state
+  const [filters, setFilters] = useState<FilterState>(() => getDefaultFilters(payload.points));
+  
+  // Update filters when payload changes
+  useEffect(() => {
+    setFilters(getDefaultFilters(payload.points));
+  }, [payload.points]);
+
+  // Comparison state
+  const [comparisonProducts, setComparisonProducts] = useState<TerrainPoint[]>([]);
+  
+  // Preview state
+  const [previewProduct, setPreviewProduct] = useState<TerrainPoint | null>(null);
+  const [previewPosition, setPreviewPosition] = useState<{ x: number; y: number } | undefined>();
+
+  // Apply filters to get visible points
+  const filteredPoints = useMemo(() => {
+    return applyFilters(payload.points, filters);
+  }, [payload.points, filters]);
 
   // Get tour products from highlights
   const tourProducts = useMemo(() => {
@@ -847,6 +878,46 @@ const TerrainApp = (props: ComponentProps) => {
     });
   };
 
+  // Handle hover for product preview
+  const handleProductHover = useCallback((point: TerrainPoint | null, event?: React.MouseEvent) => {
+    if (point && event) {
+      setPreviewProduct(point);
+      setPreviewPosition({ x: event.clientX, y: event.clientY });
+    } else {
+      setPreviewProduct(null);
+      setPreviewPosition(undefined);
+    }
+  }, []);
+
+  // Comparison handlers
+  const handleAddToComparison = useCallback((point: TerrainPoint) => {
+    setComparisonProducts((prev) => {
+      // Check if already in comparison
+      if (prev.some((p) => p.id === point.id)) {
+        return prev;
+      }
+      // Max 3 products
+      if (prev.length >= 3) {
+        return prev;
+      }
+      return [...prev, point];
+    });
+  }, []);
+
+  const handleRemoveFromComparison = useCallback((id: string) => {
+    setComparisonProducts((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  const handleClearComparison = useCallback(() => {
+    setComparisonProducts([]);
+  }, []);
+
+  // Combined select handler - adds to comparison and shows preview
+  const handleProductSelect = useCallback((point: TerrainPoint) => {
+    handleSelect(point);
+    handleAddToComparison(point);
+  }, [handleAddToComparison]);
+
   const handleFocusComplete = useCallback(() => {
     // Optional: auto-clear focus after animation
   }, []);
@@ -886,8 +957,10 @@ const TerrainApp = (props: ComponentProps) => {
   return (
     <div className="terrain-shell" ref={containerRef}>
       <Scene 
-        payload={payload} 
-        onSelect={handleSelect}
+        payload={payload}
+        filteredPoints={filteredPoints}
+        onSelect={handleProductSelect}
+        onHover={handleProductHover}
         focusPosition={focusPosition}
         onFocusComplete={handleFocusComplete}
         showQueryPath={true}
@@ -895,6 +968,30 @@ const TerrainApp = (props: ComponentProps) => {
       />
       <NarrationPanel payload={payload} />
       <ControlIndicators visible={!tourActive} />
+      
+      {/* Filter Panel */}
+      <FilterPanel
+        points={payload.points}
+        filters={filters}
+        onFiltersChange={setFilters}
+        visible={!tourActive}
+      />
+      
+      {/* Product Preview on hover */}
+      <ProductPreview
+        product={previewProduct}
+        position={previewPosition}
+        onClose={() => setPreviewProduct(null)}
+      />
+      
+      {/* Comparison Panel */}
+      <ComparisonPanel
+        selectedProducts={comparisonProducts}
+        onRemove={handleRemoveFromComparison}
+        onClear={handleClearComparison}
+        visible={!tourActive && comparisonProducts.length > 0}
+      />
+      
       <button
         className="fullscreen-btn"
         onClick={toggleFullscreen}
