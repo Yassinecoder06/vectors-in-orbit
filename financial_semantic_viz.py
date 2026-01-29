@@ -589,8 +589,9 @@ def build_search_result_terrain_payload(
             z = distance * np.sin(angle) + np.random.uniform(-2, 2)
         
         # Height based on score - best matches are highest (mountain peak)
-        # Scale height: best match = 20 (summit), worst = 2 (reduced for smaller mountain)
-        height = 2 + (1 - rank_normalized) * 18  # Higher rank = higher position
+        # Scale height: score 1.0 = 20 (summit), score 0.0 = 2 (base)
+        # Using actual final_score for dynamic height based on match quality
+        height = 2 + final_score * 18  # Higher score = higher position
         
         # Price normalized for size calculations
         price_normalized = (price - min_price) / max(max_price - min_price, 1) if max_price > min_price else 0.5

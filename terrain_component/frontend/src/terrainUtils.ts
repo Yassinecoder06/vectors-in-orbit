@@ -92,7 +92,7 @@ export interface TerrainConfig {
 
 /**
  * Generate mountains from product positions
- * Products at higher ranks (better matches) become taller peaks
+ * Products with higher scores become taller peaks (score-based height)
  * Best product is placed at the central peak
  */
 export function generateMountainsFromProducts(
@@ -105,11 +105,16 @@ export function generateMountainsFromProducts(
   const centerX = (bounds.minX + bounds.maxX) / 2;
   const centerZ = (bounds.minZ + bounds.maxZ) / 2;
   
-  // Always create the main central mountain peak - reduced height
+  // Find the best product's height (score-based) for the central peak
+  const bestProductHeight = points.length > 0 
+    ? Math.max(...points.map(p => p.height))
+    : 18;
+  
+  // Main central mountain - height based on best product score
   mountains.push({
     x: centerX,
     z: centerZ,
-    height: 18, // Reduced from 28
+    height: bestProductHeight, // Dynamic: based on best product's score
     radius: 35,
     slopeFactor: 0.5,
   });
@@ -118,8 +123,8 @@ export function generateMountainsFromProducts(
     return { mountains, hills };
   }
   
-  // Sort by rank (best first)
-  const sortedPoints = [...points].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
+  // Sort by score (highest first) - score determines height
+  const sortedPoints = [...points].sort((a, b) => b.score - a.score);
   
   // Best product gets a peak at the very center (on top of the mountain)
   // Other top products become secondary peaks around the main one
@@ -128,34 +133,34 @@ export function generateMountainsFromProducts(
   
   topProducts.forEach((point, idx) => {
     if (idx === 0) {
-      // Best product - add extra peak at center summit matching product height
+      // Best product - add extra peak at center summit matching product height (score-based)
       mountains.push({
         x: centerX,
         z: centerZ,
-        height: point.height + 2, // Match the product height plus small buffer
+        height: point.height + 2, // Product height (from score) plus small buffer
         radius: 6,
         slopeFactor: 0.8, // Sharp peak
       });
     } else {
-      // Other top products - secondary peaks around center
-      const rankFactor = 1 - idx / Math.max(topProducts.length - 1, 1);
+      // Other top products - secondary peaks with height based on their score
+      const scoreFactor = point.score; // 0.0 to 1.0
       mountains.push({
         x: point.position[0],
         z: point.position[2],
-        height: point.height + 1, // Match product height
-        radius: 8 + rankFactor * 4,
-        slopeFactor: 0.5 + rankFactor * 0.2,
+        height: point.height + 1, // Product height (from score) plus buffer
+        radius: 6 + scoreFactor * 6, // Higher score = larger mountain radius
+        slopeFactor: 0.5 + scoreFactor * 0.3,
       });
     }
   });
   
-  // Rest become smaller hills on the slopes
+  // Rest become smaller hills - height based on their scores
   restProducts.forEach((point, idx) => {
     hills.push({
       x: point.position[0],
       z: point.position[2],
-      height: point.height * 0.8, // Slightly below product
-      radius: 4 + Math.random() * 2,
+      height: point.height * 0.8, // Slightly below product height (score-based)
+      radius: 3 + point.score * 3, // Score affects hill size
       slopeFactor: 0.6,
     });
   });
