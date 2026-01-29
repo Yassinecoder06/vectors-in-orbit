@@ -575,17 +575,17 @@ def build_search_result_terrain_payload(
         
         # Distance from center increases with worse rank
         # Best match (rank 0) is at center, worst is at edge
-        distance = rank_normalized * 35  # Max distance of 35 units from center
+        distance = rank_normalized * 50  # Max distance of 50 units from center (expanded from 35)
         
         # Angle around the center (spiral pattern)
         angle = rank * 2.4 + np.random.uniform(-0.3, 0.3)  # Golden angle approximation + jitter
         
-        x = distance * np.cos(angle) + np.random.uniform(-2, 2)
-        z = distance * np.sin(angle) + np.random.uniform(-2, 2)
+        x = distance * np.cos(angle) + np.random.uniform(-3, 3)
+        z = distance * np.sin(angle) + np.random.uniform(-3, 3)
         
         # Height based on score - best matches are highest (mountain peak)
-        # Scale height: best match = 20, worst = 2
-        height = 2 + (1 - rank_normalized) * 18  # Higher rank = higher position
+        # Scale height: best match = 25, worst = 3 (increased range for more dramatic mountain)
+        height = 3 + (1 - rank_normalized) * 22  # Higher rank = higher position
         
         # Price normalized for size calculations
         price_normalized = (price - min_price) / max(max_price - min_price, 1) if max_price > min_price else 0.5
@@ -621,9 +621,24 @@ def build_search_result_terrain_payload(
             "score": point["score"],
         })
     
-    # Calculate bounds
+    # Calculate bounds with padding for full mountain visibility
     xs = [p["position"][0] for p in points]
     zs = [p["position"][2] for p in points]
+    
+    # Add significant padding around products for full terrain
+    terrain_padding = 40
+    min_terrain_size = 120  # Minimum terrain dimension
+    
+    raw_min_x = min(xs) if xs else -20
+    raw_max_x = max(xs) if xs else 20
+    raw_min_z = min(zs) if zs else -20
+    raw_max_z = max(zs) if zs else 20
+    
+    # Ensure minimum size and add padding
+    center_x = (raw_min_x + raw_max_x) / 2
+    center_z = (raw_min_z + raw_max_z) / 2
+    half_width = max((raw_max_x - raw_min_x) / 2 + terrain_padding, min_terrain_size / 2)
+    half_depth = max((raw_max_z - raw_min_z) / 2 + terrain_padding, min_terrain_size / 2)
     
     return {
         "points": points,
@@ -635,13 +650,14 @@ def build_search_result_terrain_payload(
             "budget": budget_override,
             "riskTolerance": user_risk_tolerance,
             "bounds": {
-                "minX": min(xs) if xs else -20,
-                "maxX": max(xs) if xs else 20,
-                "minZ": min(zs) if zs else -20,
-                "maxZ": max(zs) if zs else 20,
+                "minX": center_x - half_width,
+                "maxX": center_x + half_width,
+                "minZ": center_z - half_depth,
+                "maxZ": center_z + half_depth,
             },
             "price_range": {"min": min_price, "max": max_price},
-            "height_scale": 20,
+            "height_scale": 25,
+            "peakHeight": 25,  # Central peak height for terrain generation
         }
     }
 

@@ -30,6 +30,7 @@ export type TerrainMeta = {
   seed?: number;
   generated_at?: number;
   mode?: string;
+  peakHeight?: number;  // Central peak height for terrain generation
 };
 
 export type Highlight = {

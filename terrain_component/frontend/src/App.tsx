@@ -155,7 +155,8 @@ const mountainNoise = (x: number, z: number, seed: number) => {
 const buildTerrainGeometry = (
   points: TerrainPoint[],
   bounds: TerrainBounds,
-  seed: number
+  seed: number,
+  peakHeight: number = 25
 ): THREE.BufferGeometry | null => {
   if (!points.length) {
     return null;
@@ -170,8 +171,13 @@ const buildTerrainGeometry = (
   const indices = new Uint32Array(resolution * resolution * 6);
   const stepX = width / resolution;
   const stepZ = depth / resolution;
-  const smoothing = Math.max(width, depth) * 0.18;
-  const noiseAmplitude = Math.max(width, depth) * 0.15;
+  const smoothing = Math.max(width, depth) * 0.22;
+  const noiseAmplitude = Math.max(width, depth) * 0.08;
+  
+  // Center of the terrain for central peak
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+  const maxRadius = Math.max(width, depth) / 2;
 
   let minY = Number.POSITIVE_INFINITY;
   let maxY = Number.NEGATIVE_INFINITY;
@@ -181,9 +187,23 @@ const buildTerrainGeometry = (
       const vertIndex = iz * (resolution + 1) + ix;
       const x = bounds.minX + ix * stepX;
       const z = bounds.minZ + iz * stepZ;
-      const baseHeight = sampleHeightAt(x, z, points, smoothing);
+      
+      // Base height from product positions
+      const productHeight = sampleHeightAt(x, z, points, smoothing);
+      
+      // Central peak - creates mountain shape regardless of products
+      const distFromCenter = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
+      const normalizedDist = Math.min(distFromCenter / maxRadius, 1);
+      // Smooth falloff from center peak using cosine curve
+      const centralPeak = Math.max(0, Math.cos(normalizedDist * Math.PI * 0.5)) * peakHeight * 0.6;
+      
+      // Procedural noise for natural variation
       const noise = mountainNoise(x, z, seed) * noiseAmplitude;
-      const y = baseHeight + noise;
+      
+      // Combine: product heights + central peak + noise
+      // Product heights dominate near products, central peak fills gaps
+      const y = Math.max(productHeight, centralPeak * 0.5) + centralPeak * 0.5 + noise;
+      
       heights[vertIndex] = y;
       minY = Math.min(minY, y);
       maxY = Math.max(maxY, y);
@@ -197,8 +217,22 @@ const buildTerrainGeometry = (
   const color = new THREE.Color();
   for (let idx = 0; idx < heights.length; idx++) {
     const t = (heights[idx] - minY) / rangeY;
-    const eased = Math.pow(t, 1.2);
-    color.setHSL(0.55 - 0.35 * eased, 0.55 + 0.15 * (1 - eased), 0.3 + 0.4 * eased);
+    const eased = Math.pow(t, 1.1);
+    
+    // More natural mountain colors: green valleys -> brown/gray slopes -> white peaks
+    if (eased < 0.3) {
+      // Valley: rich green
+      color.setHSL(0.35, 0.55, 0.25 + eased * 0.3);
+    } else if (eased < 0.7) {
+      // Mid slopes: transition to brown/gray rock
+      const midT = (eased - 0.3) / 0.4;
+      color.setHSL(0.12 - midT * 0.05, 0.35 - midT * 0.15, 0.35 + midT * 0.15);
+    } else {
+      // Peaks: snow white
+      const peakT = (eased - 0.7) / 0.3;
+      color.setHSL(0.0, 0.05, 0.6 + peakT * 0.35);
+    }
+    
     colors[idx * 3 + 0] = color.r;
     colors[idx * 3 + 1] = color.g;
     colors[idx * 3 + 2] = color.b;
@@ -232,12 +266,14 @@ const TerrainSurface = ({
   points,
   bounds,
   seed,
+  peakHeight = 25,
 }: {
   points: TerrainPoint[];
   bounds: TerrainBounds;
   seed: number;
+  peakHeight?: number;
 }) => {
-  const geometry = useMemo(() => buildTerrainGeometry(points, bounds, seed), [points, bounds, seed]);
+  const geometry = useMemo(() => buildTerrainGeometry(points, bounds, seed, peakHeight), [points, bounds, seed, peakHeight]);
 
   useEffect(() => {
     return () => {
@@ -422,13 +458,14 @@ function Scene({
   const diag = Math.max(width, depth);
   const orbitTarget: [number, number, number] = [
     (bounds.minX + bounds.maxX) / 2,
-    0,
+    8,  // Slightly elevated target for better mountain view
     (bounds.minZ + bounds.maxZ) / 2,
   ];
+  // Camera positioned further back and at better angle for full mountain view
   const cameraPosition: [number, number, number] = [
-    bounds.maxX + diag * 0.6,
-    diag + 300,
-    bounds.maxZ + diag * 0.6,
+    bounds.maxX + diag * 0.4,
+    diag * 0.5 + 20,
+    bounds.maxZ + diag * 0.4,
   ];
 
   return (
@@ -438,7 +475,7 @@ function Scene({
       <directionalLight position={[25, 40, 10]} intensity={1.2} castShadow />
       <pointLight position={[-20, 15, -10]} intensity={0.5} />
       <Stars radius={80} depth={40} factor={4} fade speed={0.4} />
-      <TerrainSurface points={payload.points} bounds={bounds} seed={meshSeed} />
+      <TerrainSurface points={payload.points} bounds={bounds} seed={meshSeed} peakHeight={payload.meta?.peakHeight ?? 25} />
       {/* Query path showing the journey through ranked products */}
       <QueryPath points={payload.points} visible={showQueryPath ?? true} />
       <ProductMarkers points={payload.points} onSelect={onSelect} />
