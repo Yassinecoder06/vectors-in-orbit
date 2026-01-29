@@ -73,13 +73,15 @@ const QueryPath = ({ points, visible = true, sampleHeight }: QueryPathProps) => 
     <Line
       points={pathPoints}
       vertexColors={pathColors}
-      lineWidth={3}
+      lineWidth={1.5}
       transparent
-      opacity={0.75}
+      opacity={0.35}
       dashed
       dashScale={2}
       dashSize={1}
       gapSize={0.5}
+      depthTest={false}
+      renderOrder={999}
     />
   );
 };
