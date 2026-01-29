@@ -8,6 +8,7 @@ export type TerrainPoint = {
   brand: string;
   category: string;
   name: string;
+  description?: string;
   score: number;
   risk_tolerance: number;
   imageUrl?: string;

@@ -17,21 +17,19 @@ import random
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import numpy as np
-import matplotlib.pyplot as plt
 
 # Import backend search function
 from search_pipeline import search_products, get_qdrant_client, PRODUCTS_COLLECTION
 from interaction_logger import log_interaction, get_interaction_stats_by_type
 
-# Import visualization functions
+# Import terrain component
+from terrain_component import terrain_canvas
+
+# Import financial visualization functions
 from financial_semantic_viz import (
-    project_embeddings_umap,
-    visualize_financial_landscape,
     determine_safety_colors,
-    export_products_for_visualization,
     build_search_result_terrain_payload,
 )
-from terrain_component import terrain_canvas
 
 # =============================================================================
 # Interaction Hooks
@@ -249,6 +247,7 @@ def init_session_state():
         "search_results": [],
         "has_searched": False,
         "terrain_seed": 42,
+        "selected_terrain_product": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -647,121 +646,6 @@ def perform_search(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         return []
 
 
-def render_financial_landscape(user_id: str, risk_tolerance: str = "Medium", top_k: int = 50):
-    """Render the financial landscape visualization using real Qdrant data."""
-    try:
-        with st.spinner("📊 Loading financial landscape..."):
-            # Get Qdrant client
-            client = get_qdrant_client()
-            
-            # Export products for visualization with custom risk tolerance
-            products_dict = export_products_for_visualization(
-                client, 
-                user_id, 
-                top_k=top_k,
-                risk_tolerance=risk_tolerance  # Pass UI risk tolerance
-            )
-            
-            if not products_dict:
-                st.warning("No products found. Check Qdrant collections.")
-                return
-            
-            # Extract vectors and metadata
-            product_ids = list(products_dict.keys())
-            embeddings = np.array([products_dict[pid]['embedding'] for pid in product_ids])
-            
-            # Project to 2D
-            coords = project_embeddings_umap(embeddings)
-            
-            # Prepare metadata
-            finance_metadata = {
-                'prices': np.array([products_dict[pid]['price'] for pid in product_ids]),
-                'user_budgets': np.array([products_dict[pid]['user_budget'] for pid in product_ids]),
-                'risk_tolerances': np.array([products_dict[pid]['user_risk_tolerance'] for pid in product_ids]),
-                'final_scores': np.array([products_dict[pid]['final_score'] for pid in product_ids])
-            }
-            
-            # Create visualization
-            fig, ax = plt.subplots(figsize=(14, 10), facecolor='white')
-            
-            # Classify products by financial safety
-            colors = []
-            sizes = []
-            
-            for i in range(len(product_ids)):
-                price = finance_metadata['prices'][i]
-                budget = finance_metadata['user_budgets'][i]
-                tolerance = finance_metadata['risk_tolerances'][i]
-                final_score = finance_metadata['final_scores'][i]
-                
-                # Calculate metrics
-                affordability_ratio = price / budget if budget > 0 else 1.0
-                risk_safety = abs(affordability_ratio - tolerance)
-                
-                # Color assignment logic
-                if affordability_ratio < 0.7 and risk_safety < 0.2:
-                    color = '#2ecc71'  # GREEN: Safe and affordable
-                elif affordability_ratio < 0.7 and risk_safety < 0.5:
-                    color = '#f39c12'  # ORANGE: Affordable but risky
-                else:
-                    color = '#e74c3c'  # RED: Unaffordable or too risky
-                
-                colors.append(color)
-                size = 100 + (final_score * 400)
-                sizes.append(size)
-            
-            # Plot
-            ax.scatter(coords[:, 0], coords[:, 1], 
-                      c=colors, s=sizes, alpha=0.7, 
-                      edgecolors='black', linewidth=0.5)
-            
-            # Add legend
-            from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor='#2ecc71', edgecolor='black', label='Safe & Affordable (Recommended)'),
-                Patch(facecolor='#f39c12', edgecolor='black', label='Affordable but Risky (Filtered)'),
-                Patch(facecolor='#e74c3c', edgecolor='black', label='Unaffordable or Too Risky (Hidden)'),
-            ]
-            ax.legend(handles=legend_elements, loc='upper right', fontsize=11, framealpha=0.95)
-            
-            # Styling
-            ax.set_xlabel('Semantic Similarity (Dimension 1)', fontsize=12, fontweight='bold')
-            ax.set_ylabel('Semantic Similarity (Dimension 2)', fontsize=12, fontweight='bold')
-            ax.set_title('Financial Discovery Landscape', fontsize=14, fontweight='bold', pad=20)
-            ax.grid(True, alpha=0.2, linestyle='--')
-            ax.set_facecolor('#f8f9fa')
-            
-            # Display plot
-            st.pyplot(fig, use_container_width=True)
-            
-            # Display statistics
-            safety_colors = determine_safety_colors(finance_metadata)
-            green_count = np.sum(safety_colors == 'green')
-            orange_count = np.sum(safety_colors == 'orange')
-            red_count = np.sum(safety_colors == 'red')
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Safe & Affordable", f"{green_count}")
-            with col2:
-                st.metric("Risky/Stretched", f"{orange_count}")
-            with col3:
-                st.metric("Unsafe", f"{red_count}")
-            with col4:
-                avg_score = np.mean(finance_metadata['final_scores'])
-                st.metric("Avg Score", f"{avg_score:.2f}")
-            
-            # Additional metrics
-            col1, col2 = st.columns(2)
-            with col1:
-                st.info(f"**Budget:** ${finance_metadata['user_budgets'][0]:,.2f}")
-            with col2:
-                st.info(f"**Avg Product Price:** ${np.mean(finance_metadata['prices']):,.2f}")
-            
-    except Exception as e:
-        st.error(f"Error loading financial landscape: {e}")
-
-
 def render_main_area():
     """Render main search interface and results."""
     st.title("🛒 Context-Aware FinCommerce Engine")
@@ -802,7 +686,7 @@ def render_main_area():
         
         if results:
             # Create tabs for different views
-            tab1, tab2 = st.tabs(["📊 Recommendations", "🗺️ Financial Landscape"])
+            tab1, tab2 = st.tabs(["📊 Recommendations", "🗺️ 3D Explorer"])
             
             with tab1:
                 st.markdown(f"### 🎁 Top {len(results)} Recommendations")
@@ -835,19 +719,17 @@ def render_main_area():
                     render_product_card(product, idx)
             
             with tab2:
-                st.markdown("### 🗺️ Financial Discovery Landscape")
+                st.markdown("### 🗺️ 3D Terrain Explorer")
                 st.markdown(
-                    "Visualization of **your search results** positioned by semantic similarity. "
-                    "**Green dots** = safe & affordable. **Orange dots** = risky/stretched. "
-                    "**Red dots** = unsafe/unaffordable (filtered from recommendations)."
+                    "Explore your search results in an interactive 3D landscape. "
+                    "**Green markers** = safe & affordable. **Orange markers** = risky/stretched. "
+                    "**Red markers** = unsafe/unaffordable."
                 )
                 
-                # Extract metadata from search results and re-fetch vectors
                 try:
                     if len(results) < 3:
                         st.warning("Need at least 3 products for visualization. Try searching for more results.")
                     else:
-                        product_ids = [r.get("id") for r in results]
                         prices = []
                         final_scores = []
                         
@@ -863,153 +745,98 @@ def render_main_area():
                             prices.append(payload.get("price", 0.0))
                             final_scores.append(result.get("final_score", 0.0))
                         
-                        # Fetch vectors for these products from Qdrant
-                        with st.spinner("Fetching product embeddings..."):
-                            client = get_qdrant_client()
-                            points = client.retrieve(
-                                collection_name=PRODUCTS_COLLECTION,
-                                ids=product_ids,
-                                with_vectors=True
-                            )
-                            
-                            embeddings = []
-                            for point in points:
-                                if point.vector is not None:
-                                    embeddings.append(point.vector)
+                        # Prepare metadata for safety color calculation
+                        finance_metadata = {
+                            'prices': np.array(prices),
+                            'user_budgets': np.array([total_budget] * len(prices)),
+                            'risk_tolerances': np.array([user_risk_tolerance] * len(prices)),
+                            'final_scores': np.array(final_scores)
+                        }
                         
-                        if len(embeddings) > 0:
-                            embeddings_array = np.array(embeddings)
-                            
-                            # Project to 2D
-                            coords = project_embeddings_umap(embeddings_array)
-                            
-                            # Prepare metadata
-                            finance_metadata = {
-                                'prices': np.array(prices),
-                                'user_budgets': np.array([total_budget] * len(prices)),
-                                'risk_tolerances': np.array([user_risk_tolerance] * len(prices)),
-                                'final_scores': np.array(final_scores)
-                            }
-                            
-                            # Create visualization
-                            fig, ax = plt.subplots(figsize=(14, 10), facecolor='white')
-                            
-                            # Classify products by financial safety
-                            colors = []
-                            sizes = []
-                            
-                            for i in range(len(prices)):
-                                price = finance_metadata['prices'][i]
-                                budget = finance_metadata['user_budgets'][i]
-                                tolerance = finance_metadata['risk_tolerances'][i]
-                                final_score = finance_metadata['final_scores'][i]
-                                
-                                # Calculate metrics
-                                affordability_ratio = price / budget if budget > 0 else 1.0
-                                risk_safety = abs(affordability_ratio - tolerance)
-                                
-                                # Color assignment logic
-                                if affordability_ratio < 0.7 and risk_safety < 0.2:
-                                    color = '#2ecc71'  # GREEN: Safe and affordable
-                                elif affordability_ratio < 0.7 and risk_safety < 0.5:
-                                    color = '#f39c12'  # ORANGE: Affordable but risky
-                                else:
-                                    color = '#e74c3c'  # RED: Unaffordable or too risky
-                                
-                                colors.append(color)
-                                size = 100 + (final_score * 400)
-                                sizes.append(size)
-                            
-                            # Plot
-                            ax.scatter(coords[:, 0], coords[:, 1], 
-                                      c=colors, s=sizes, alpha=0.7, 
-                                      edgecolors='black', linewidth=0.5)
-                            
-                            # Add legend
-                            from matplotlib.patches import Patch
-                            legend_elements = [
-                                Patch(facecolor='#2ecc71', edgecolor='black', label='Safe & Affordable'),
-                                Patch(facecolor='#f39c12', edgecolor='black', label='Affordable but Risky'),
-                                Patch(facecolor='#e74c3c', edgecolor='black', label='Unaffordable/Too Risky'),
-                            ]
-                            ax.legend(handles=legend_elements, loc='upper right', fontsize=11, framealpha=0.95)
-                            
-                            # Styling
-                            ax.set_xlabel('Semantic Similarity (Dimension 1)', fontsize=12, fontweight='bold')
-                            ax.set_ylabel('Semantic Similarity (Dimension 2)', fontsize=12, fontweight='bold')
-                            ax.set_title(f'Financial Landscape: "{st.session_state.search_query}"', fontsize=14, fontweight='bold', pad=20)
-                            ax.grid(True, alpha=0.2, linestyle='--')
-                            ax.set_facecolor('#f8f9fa')
-                            
-                            # Display plot
-                            st.pyplot(fig, use_container_width=True)
-                            
-                            # Display statistics
-                            safety_colors = determine_safety_colors(finance_metadata)
-                            green_count = np.sum(safety_colors == 'green')
-                            orange_count = np.sum(safety_colors == 'orange')
-                            red_count = np.sum(safety_colors == 'red')
-                            
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric("🟢 Safe & Affordable", f"{green_count}")
-                            with col2:
-                                st.metric("🟠 Risky/Stretched", f"{orange_count}")
-                            with col3:
-                                st.metric("🔴 Unsafe", f"{red_count}")
-                            with col4:
-                                avg_score = np.mean(finance_metadata['final_scores'])
-                                st.metric("Avg Score", f"{avg_score:.2f}")
-                            
-                            # Additional metrics
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.info(f"**Your Budget:** ${total_budget:,.2f}")
-                            with col2:
-                                st.info(f"**Avg Product Price:** ${np.mean(finance_metadata['prices']):,.2f}")
+                        # Display safety color statistics
+                        safety_colors = determine_safety_colors(finance_metadata)
+                        green_count = np.sum(safety_colors == 'green')
+                        orange_count = np.sum(safety_colors == 'orange')
+                        red_count = np.sum(safety_colors == 'red')
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("🟢 Safe & Affordable", f"{green_count}")
+                        with col2:
+                            st.metric("🟠 Risky/Stretched", f"{orange_count}")
+                        with col3:
+                            st.metric("🔴 Unsafe", f"{red_count}")
+                        with col4:
+                            avg_score = np.mean(finance_metadata['final_scores'])
+                            st.metric("Avg Score", f"{avg_score:.2f}")
+                        
+                        # Additional metrics
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.info(f"**Your Budget:** ${total_budget:,.2f}")
+                        with col2:
+                            st.info(f"**Avg Product Price:** ${np.mean(finance_metadata['prices']):,.2f}")
 
-                            st.markdown("---")
-                            st.markdown("#### ⚡ Experimental 3D Terrain Explorer")
-                            st.caption(
-                                "Prototype React Three Fiber canvas built from sampled embeddings. "
-                                "Displays procedural terrain plus highlighted products."
+                        st.markdown("---")
+                        st.markdown("#### ⚡ 3D Terrain Explorer")
+                        st.caption(
+                            "Interactive 3D terrain with product markers. "
+                            "Use WASD keys to navigate, click products to select."
+                        )
+
+                        toggle_col, shuffle_col = st.columns([4, 1])
+                        with toggle_col:
+                            show_terrain = st.toggle(
+                                "Enable 3D terrain",
+                                value=True,
+                                key="terrain_toggle",
                             )
+                        with shuffle_col:
+                            if show_terrain and st.button("Shuffle seed", use_container_width=True):
+                                st.session_state.terrain_seed = random.randint(1, 1_000_000)
+                                st.rerun()
 
-                            toggle_col, shuffle_col = st.columns([4, 1])
-                            with toggle_col:
-                                show_terrain = st.toggle(
-                                    "Enable 3D terrain (beta)",
-                                    value=False,
-                                    key="terrain_toggle",
+                        if show_terrain:
+                            with st.spinner("Rendering 3D terrain..."):
+                                terrain_payload = build_search_result_terrain_payload(
+                                    results=results,
+                                    coords=None,  # No UMAP coords needed - function handles positioning
+                                    user_risk_tolerance=user_risk_tolerance,
+                                    budget_override=total_budget,
+                                    random_seed=int(st.session_state.terrain_seed),
                                 )
-                            with shuffle_col:
-                                if show_terrain and st.button("Shuffle seed", use_container_width=True):
-                                    st.session_state.terrain_seed = random.randint(1, 1_000_000)
-                                    st.rerun()
 
-                            if show_terrain:
-                                with st.spinner("Rendering 3D terrain..."):
-                                    terrain_payload = build_search_result_terrain_payload(
-                                        results=results,
-                                        coords=coords,
-                                        user_risk_tolerance=user_risk_tolerance,
-                                        budget_override=total_budget,
-                                        random_seed=int(st.session_state.terrain_seed),
-                                    )
+                            if terrain_payload:
+                                selected_terrain = terrain_canvas(
+                                    data=terrain_payload,
+                                    height=650,
+                                    key=f"terrain_canvas_{terrain_payload.get('meta', {}).get('seed', st.session_state.terrain_seed)}",
+                                )
+                                if selected_terrain:
+                                    st.session_state.selected_terrain_product = selected_terrain
+                                st.caption(
+                                    "Click and drag to orbit the scene. Scroll to zoom. WASD to navigate."
+                                )
 
-                                if terrain_payload:
-                                    terrain_canvas(
-                                        data=terrain_payload,
-                                        height=650,
-                                        key=f"terrain_canvas_{terrain_payload.get('meta', {}).get('seed', st.session_state.terrain_seed)}",
-                                    )
-                                    st.caption(
-                                        "Click and drag to orbit the scene. Scroll to zoom. Feature is bundled with the app; no external hosting required."
-                                    )
-                                else:
-                                    st.warning("Unable to create the terrain payload. Try again in a moment.")
-                        else:
-                            st.warning("No product embeddings available for visualization.")
+                                selected_product = st.session_state.get("selected_terrain_product")
+                                if selected_product:
+                                    st.markdown("##### 🧭 Selected Terrain Product")
+                                    left, right = st.columns([1, 2])
+                                    with left:
+                                        image_url = selected_product.get("imageUrl") or ""
+                                        if image_url:
+                                            st.image(image_url, width=220)
+                                    with right:
+                                        st.markdown(f"**{selected_product.get('name', 'Unknown Product')}**")
+                                        st.caption(
+                                            f"${selected_product.get('price', 0):,.2f} · "
+                                            f"{selected_product.get('brand', 'Unknown')} · "
+                                            f"{selected_product.get('category', 'Unknown')}"
+                                        )
+                                        description = selected_product.get("description") or "No description available."
+                                        st.write(description)
+                            else:
+                                st.warning("Unable to create the terrain payload. Try again in a moment.")
                         
                 except Exception as e:
                     st.error(f"Error creating visualization: {e}")

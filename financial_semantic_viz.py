@@ -6,8 +6,8 @@ Not used for ranking, not used for recommendation logic.
 
 This module creates a "Financial Discovery Landscape" that visualizes:
 1. How similar products are to user queries (via semantic embeddings)
-2. Which are financially safe (affordability + risk tolerance) → shown
-3. Which are financially unsafe (unaffordable or risky) → hidden
+2. Which are financially safe (affordability vs budget) → shown
+3. Which are financially unsafe (unaffordable or stretched) → hidden
 
 PRINCIPLE:
 Traditional recommenders show everything and hope users ignore unsuitable items.
@@ -16,11 +16,9 @@ This visualization proves it.
 """
 
 import json
-import random
-import time
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Any, Dict, Tuple, List, Optional, Sequence
+from typing import Dict, Tuple, List
 import warnings
 import os
 from dotenv import load_dotenv
@@ -36,11 +34,6 @@ try:
 except ImportError:
     QdrantClient = None
 
-try:
-    from search_pipeline import PRODUCTS_COLLECTION
-except ImportError:
-    PRODUCTS_COLLECTION = "products_multimodal"
-
 load_dotenv()
 
 
@@ -55,8 +48,6 @@ def load_product_data(filepath: str) -> Dict:
         "embedding": [0.1, 0.2, ..., 0.384],
         "price": 1299.99,
         "user_budget": 1500.0,
-        "risk_level": 0.3,  # 0=safe, 1=risky
-        "user_risk_tolerance": 0.5,  # 0=conservative, 1=aggressive
         "final_score": 0.87  # After CF + reranking
       },
       ...
@@ -86,24 +77,15 @@ def load_product_data(filepath: str) -> Dict:
         # Extract financial data
         price = product_info['price']
         user_budget = product_info['user_budget']
-        risk_level = product_info['risk_level']
-        user_risk_tolerance = product_info['user_risk_tolerance']
         final_score = product_info['final_score']
         
         # Compute affordability ratio: 0=affordable, 1=unaffordable
         affordability_ratio = min(1.0, price / user_budget) if user_budget > 0 else 1.0
         
-        # Compute risk safety: 0=safe, 1=unsafe
-        # Product is safe if risk_level <= user_risk_tolerance
-        risk_safety = max(0.0, risk_level - user_risk_tolerance)
-        
         finance_metadata[product_id] = {
             'price': price,
             'user_budget': user_budget,
             'affordability_ratio': affordability_ratio,
-            'risk_level': risk_level,
-            'user_risk_tolerance': user_risk_tolerance,
-            'risk_safety': risk_safety,
             'final_score': final_score
         }
     
@@ -166,27 +148,21 @@ def determine_safety_colors(finance_metadata: Dict) -> np.ndarray:
     """
     prices = finance_metadata['prices']
     user_budgets = finance_metadata['user_budgets']
-    risk_tolerances = finance_metadata['risk_tolerances']
-    
     colors = []
     for i in range(len(prices)):
         price = prices[i]
         budget = user_budgets[i]
-        tolerance = risk_tolerances[i]
         
         # Affordability ratio
         affordability_ratio = price / budget if budget > 0 else 1.0
         
-        # Financial risk calculation
-        risk_safety = abs(affordability_ratio - tolerance)  # How far from tolerance
-        
         # Color assignment logic
-        if affordability_ratio < 0.7 and risk_safety < 0.2:
+        if affordability_ratio < 0.7:
             colors.append('green')  # Safe and affordable
-        elif affordability_ratio < 0.7 and risk_safety < 0.5:
-            colors.append('orange')  # Affordable but risky
+        elif affordability_ratio < 1.0:
+            colors.append('orange')  # Affordable but stretched
         else:
-            colors.append('red')  # Unaffordable or too risky
+            colors.append('red')  # Unaffordable
     
     return np.array(colors)
 
@@ -200,9 +176,9 @@ def visualize_financial_landscape(coords: np.ndarray,
     Create a 2D scatter plot showing financial safety of products.
     
     COLOR SCHEME:
-    - GREEN: Affordable (ratio < 0.7) AND safe risk (safety < 0.2)
-    - ORANGE: Affordable but risk-borderline (0.2 <= safety < 0.5)
-    - RED: Unaffordable (ratio >= 0.7) OR high risk (safety >= 0.5)
+    - GREEN: Affordable (ratio < 0.7)
+    - ORANGE: Stretched (0.7 <= ratio < 1.0)
+    - RED: Unaffordable (ratio >= 1.0)
     
     POINT SIZE: Proportional to final_score
     - Larger = higher score (better match + better CF signal)
@@ -217,7 +193,7 @@ def visualize_financial_landscape(coords: np.ndarray,
     
     Args:
         coords: 2D coordinates from UMAP, shape (n_products, 2)
-        finance_metadata: Dict with affordability_ratio, risk_safety, final_score
+        finance_metadata: Dict with affordability_ratio and final_score
         product_ids: List of product identifiers for labeling
         title: Plot title
         figsize: Figure size in inches
@@ -233,7 +209,6 @@ def visualize_financial_landscape(coords: np.ndarray,
     
     prices = finance_metadata.get('prices', [])
     user_budgets = finance_metadata.get('user_budgets', [])
-    risk_tolerances = finance_metadata.get('risk_tolerances', [])
     final_scores = finance_metadata.get('final_scores', [])
     
     for i, product_id in enumerate(product_ids):
@@ -242,22 +217,20 @@ def visualize_financial_landscape(coords: np.ndarray,
             
         price = prices[i]
         budget = user_budgets[i]
-        tolerance = risk_tolerances[i]
         final_score = final_scores[i]
         
         # Calculate metrics
         affordability_ratio = price / budget if budget > 0 else 1.0
-        risk_safety = abs(affordability_ratio - tolerance)
         
         # Color assignment logic
-        if affordability_ratio < 0.7 and risk_safety < 0.2:
+        if affordability_ratio < 0.7:
             color = '#2ecc71'  # GREEN: Safe and affordable
             alpha = 0.8
-        elif affordability_ratio < 0.7 and risk_safety < 0.5:
-            color = '#f39c12'  # ORANGE: Affordable but risky
+        elif affordability_ratio < 1.0:
+            color = '#f39c12'  # ORANGE: Affordable but stretched
             alpha = 0.6
         else:
-            color = '#e74c3c'  # RED: Unaffordable or too risky
+            color = '#e74c3c'  # RED: Unaffordable
             alpha = 0.3
         
         colors.append(color)
@@ -276,8 +249,8 @@ def visualize_financial_landscape(coords: np.ndarray,
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='#2ecc71', edgecolor='black', label='Safe & Affordable (Recommended)'),
-        Patch(facecolor='#f39c12', edgecolor='black', label='Affordable but Risky (Filtered)'),
-        Patch(facecolor='#e74c3c', edgecolor='black', label='Unaffordable or Too Risky (Hidden)'),
+        Patch(facecolor='#f39c12', edgecolor='black', label='Affordable but Stretched (Filtered)'),
+        Patch(facecolor='#e74c3c', edgecolor='black', label='Unaffordable (Hidden)'),
     ]
     ax.legend(handles=legend_elements, loc='upper right', fontsize=11, framealpha=0.95)
     
@@ -297,7 +270,6 @@ def visualize_financial_landscape(coords: np.ndarray,
         "• Color = financial safety status\n\n"
         "WHY RED DOTS ARE HIDDEN:\n"
         "• Unaffordable for your budget\n"
-        "• Risk level exceeds your tolerance\n"
         "• Failed financial safety validation\n\n"
         "RECOMMENDATION INTEGRITY:\n"
         "Only GREEN dots are shown in recommendations.\n"
@@ -336,22 +308,18 @@ def demo():
     # Create synthetic product data
     products = {}
     user_budget = 2000.0
-    user_risk_tolerance = 0.4
     
     for i in range(n_products):
         product_id = f"product_{i:03d}"
         
-        # Vary prices and risks
+        # Vary prices
         price = np.random.uniform(100, 5000)
-        risk_level = np.random.uniform(0, 1)
         final_score = np.random.uniform(0.4, 1.0)  # After CF + reranking
         
         products[product_id] = {
             'embedding': embeddings[i].tolist(),
             'price': float(price),
             'user_budget': float(user_budget),
-            'risk_level': float(risk_level),
-            'user_risk_tolerance': float(user_risk_tolerance),
             'final_score': float(final_score)
         }
     
@@ -365,9 +333,6 @@ def demo():
                 'price': product_data['price'],
                 'user_budget': product_data['user_budget'],
                 'affordability_ratio': min(1.0, product_data['price'] / user_budget),
-                'risk_level': product_data['risk_level'],
-                'user_risk_tolerance': user_risk_tolerance,
-                'risk_safety': max(0.0, product_data['risk_level'] - user_risk_tolerance),
                 'final_score': product_data['final_score']
             }
             for product_id, product_data in products.items()
@@ -395,16 +360,16 @@ def demo():
     print("=" * 70)
     
     safe_count = sum(1 for m in data['finance_metadata'].values() 
-                     if m['affordability_ratio'] < 0.7 and m['risk_safety'] < 0.2)
+                     if m['affordability_ratio'] < 0.7)
     risky_count = sum(1 for m in data['finance_metadata'].values() 
-                      if m['affordability_ratio'] < 0.7 and 0.2 <= m['risk_safety'] < 0.5)
+                      if 0.7 <= m['affordability_ratio'] < 1.0)
     unsafe_count = sum(1 for m in data['finance_metadata'].values() 
-                       if m['affordability_ratio'] >= 0.7 or m['risk_safety'] >= 0.5)
+                       if m['affordability_ratio'] >= 1.0)
     
     print(f"Total products available: {len(products)}")
     print(f"  ✅ GREEN (Safe & Affordable): {safe_count} products (shown)")
-    print(f"  ⚠️  ORANGE (Affordable but Risky): {risky_count} products (filtered)")
-    print(f"  ❌ RED (Unaffordable or Too Risky): {unsafe_count} products (hidden)")
+    print(f"  ⚠️  ORANGE (Stretched): {risky_count} products (filtered)")
+    print(f"  ❌ RED (Unaffordable): {unsafe_count} products (hidden)")
     print(f"\nRecommendation Filtering: {(unsafe_count / len(products) * 100):.1f}% of products filtered out")
     print("=" * 70)
     
@@ -414,8 +379,7 @@ def demo():
 def export_products_for_visualization(
     client,  # QdrantClient instance
     user_id: str,
-    top_k: int = 50,
-    risk_tolerance: str = None  # Override risk tolerance from UI
+    top_k: int = 50
 ) -> Dict[str, Dict]:
     """
     Export product embeddings + financial metadata from Qdrant Cloud.
@@ -430,8 +394,6 @@ def export_products_for_visualization(
         client: QdrantClient connected to Qdrant Cloud
         user_id: User ID to filter financials and interactions
         top_k: Number of products to export (default 50)
-        risk_tolerance: Override risk tolerance (string: 'Low', 'Medium', 'High')
-        
     Returns:
         Dict matching visualization schema:
         {
@@ -439,52 +401,11 @@ def export_products_for_visualization(
             "embedding": [...],
             "price": float,
             "user_budget": float,
-            "risk_level": float,  # (affordability_ratio + financial_risk) / 2
-            "user_risk_tolerance": float,
             "final_score": float
           }
         }
     """
     try:
-        # Map categorical risk tolerance (low/medium/high) to numeric [0,1]
-        def _map_risk_tier_to_numeric(value: str) -> float:
-            if not isinstance(value, str):
-                return 0.5
-            tier = value.strip().lower()
-            # Handle common misspelling 'meduim' and synonyms
-            mapping = {
-                'low': 0.2,
-                'medium': 0.5,
-                'meduim': 0.5,
-                'mid': 0.5,
-                'high': 0.8,
-            }
-            return mapping.get(tier, 0.5)
-        
-        # Use passed risk_tolerance parameter if provided, otherwise try to get from Qdrant
-        if risk_tolerance:
-            user_risk_tolerance = _map_risk_tier_to_numeric(risk_tolerance)
-            user_risk_tier = risk_tolerance.lower()
-        else:
-            # Fallback to querying user_profiles collection
-            user_risk_tier = None
-            try:
-                user_profiles = client.scroll(
-                    collection_name="user_profiles",
-                    limit=1,
-                    with_payload=True,
-                    with_vectors=False,
-                )
-                if user_profiles[0]:
-                    for point in user_profiles[0]:
-                        if point.payload.get("user_id") == user_id:
-                            user_risk_tier = point.payload.get("risk_tolerance", "medium")
-                            break
-            except Exception as e:
-                pass  # Use default
-            
-            user_risk_tolerance = _map_risk_tier_to_numeric(user_risk_tier if user_risk_tier else "medium")
-        
         # ===== 2. Get User Financial Context (budget) =====
         user_budget = 5000.0  # Default budget
         try:
@@ -521,17 +442,10 @@ def export_products_for_visualization(
                     # Calculate affordability ratio
                     affordability_ratio = price / user_budget if user_budget > 0 else 1.0
                     
-                    # Risk level: combination of affordability and financial risk
-                    # Higher affordability_ratio = higher risk
-                    risk_level = min(affordability_ratio, 1.0)
-                    
                     products_dict[product_id] = {
                         "embedding": point.vector.tolist() if hasattr(point.vector, 'tolist') else list(point.vector),
                         "price": float(price),
                         "user_budget": float(user_budget),
-                        "risk_level": float(risk_level),
-                        "user_risk_tolerance": float(user_risk_tolerance),
-                        "user_risk_tier": (str(user_risk_tier).lower() if user_risk_tier is not None else "medium"),
                         "final_score": 0.75,  # Default score, will be updated with CF
                         "affordability_ratio": float(affordability_ratio),
                     }
@@ -582,6 +496,154 @@ def export_products_for_visualization(
     except Exception as e:
         print(f"Error in export_products_for_visualization: {e}")
         return {}
+
+
+def build_search_result_terrain_payload(
+    results: List[Dict],
+    coords: np.ndarray = None,
+    user_risk_tolerance: float = 0.5,
+    budget_override: float = None,
+    random_seed: int = 42,
+) -> Dict:
+    """
+    Build terrain payload from search results for 3D visualization.
+    
+    Args:
+        results: Search results from search_pipeline
+        coords: Optional 2D coordinates (if None, generates grid positions)
+        user_risk_tolerance: User's risk tolerance (0.0-1.0)
+        budget_override: Override budget for affordability calculations
+        random_seed: Random seed for terrain generation
+        
+    Returns:
+        Dict payload for terrain_canvas component
+    """
+    import random
+    random.seed(random_seed)
+    np.random.seed(random_seed)
+    
+    if not results:
+        return None
+    
+    points = []
+    
+    # Generate positions if coords not provided
+    n_products = len(results)
+    if coords is None:
+        # Create a grid-like distribution with some randomness
+        grid_size = int(np.ceil(np.sqrt(n_products)))
+        positions = []
+        for i in range(n_products):
+            row = i // grid_size
+            col = i % grid_size
+            # Normalize to -1 to 1 range with some jitter
+            x = (col / max(grid_size - 1, 1)) * 2 - 1 + np.random.uniform(-0.1, 0.1)
+            y = (row / max(grid_size - 1, 1)) * 2 - 1 + np.random.uniform(-0.1, 0.1)
+            positions.append([x, y])
+        coords = np.array(positions)
+    
+    # Normalize coords to terrain scale (-50 to 50)
+    if coords.shape[0] > 0:
+        coords_min = coords.min(axis=0)
+        coords_max = coords.max(axis=0)
+        coords_range = coords_max - coords_min
+        coords_range[coords_range == 0] = 1  # Avoid division by zero
+        normalized_coords = (coords - coords_min) / coords_range * 80 - 40  # Scale to -40 to 40
+    else:
+        normalized_coords = coords
+    
+    min_price = float('inf')
+    max_price = 0
+    
+    for i, result in enumerate(results):
+        payload = result.get("payload", {})
+        price = payload.get("price", 0.0)
+        min_price = min(min_price, price)
+        max_price = max(max_price, price)
+        final_score = result.get("final_score", 0.5)
+        
+        # Calculate affordability color
+        if budget_override and budget_override > 0:
+            affordability_ratio = price / budget_override
+        else:
+            affordability_ratio = 0.5  # Default to medium if no budget
+        
+        risk_safety = abs(affordability_ratio - user_risk_tolerance)
+        
+        # Determine color based on affordability
+        if affordability_ratio < 0.7 and risk_safety < 0.2:
+            color = "#2ecc71"  # GREEN: Safe and affordable
+        elif affordability_ratio < 0.7 and risk_safety < 0.5:
+            color = "#f39c12"  # ORANGE: Affordable but risky
+        else:
+            color = "#e74c3c"  # RED: Unaffordable or too risky
+        
+        # Get position from coords
+        if i < len(normalized_coords):
+            x, z = normalized_coords[i]
+        else:
+            x, z = np.random.uniform(-40, 40), np.random.uniform(-40, 40)
+        
+        # Calculate height based on final_score (higher score = higher on terrain)
+        height = float(final_score) * 18
+        
+        # Price normalized for size calculations
+        price_normalized = (price - min_price) / max(max_price - min_price, 1) if max_price > min_price else 0.5
+        
+        point_data = {
+            "id": str(result.get("id", f"product_{i}")),
+            "name": payload.get("name", "Unknown Product"),
+            "price": float(price),
+            "price_normalized": price_normalized,
+            "brand": payload.get("brand", "Unknown"),
+            "category": payload.get("category", "Unknown"),
+            "description": payload.get("description", ""),
+            "imageUrl": payload.get("image_url", ""),
+            "score": float(final_score),
+            "color": color,
+            "height": height,
+            "risk_tolerance": user_risk_tolerance,
+            "position": [float(x), height, float(z)]  # [x, y, z] array format
+        }
+        points.append(point_data)
+    
+    # Create highlights from top-scoring products
+    sorted_points = sorted(points, key=lambda p: p["score"], reverse=True)
+    highlights = []
+    for idx, point in enumerate(sorted_points[:min(7, len(sorted_points))]):
+        highlights.append({
+            "id": point["id"],
+            "label": f"#{idx + 1} {point['name'][:20]}..." if len(point['name']) > 20 else f"#{idx + 1} {point['name']}",
+            "position": point["position"],
+            "price": point["price"],
+            "brand": point["brand"],
+            "category": point["category"],
+            "score": point["score"],
+        })
+    
+    # Calculate bounds
+    xs = [p["position"][0] for p in points]
+    zs = [p["position"][2] for p in points]
+    
+    return {
+        "points": points,
+        "highlights": highlights,
+        "meta": {
+            "mode": "search_results",
+            "seed": random_seed,
+            "count": len(points),
+            "budget": budget_override,
+            "riskTolerance": user_risk_tolerance,
+            "bounds": {
+                "minX": min(xs) if xs else -20,
+                "maxX": max(xs) if xs else 20,
+                "minZ": min(zs) if zs else -20,
+                "maxZ": max(zs) if zs else 20,
+            },
+            "price_range": {"min": min_price, "max": max_price},
+            "height_scale": 18,
+        }
+    }
 
 
 def demo_with_real_data(user_id: str = None, top_k: int = 50):
@@ -640,7 +702,6 @@ def demo_with_real_data(user_id: str = None, top_k: int = 50):
         finance_metadata = {
             'prices': np.array([products_dict[pid]['price'] for pid in product_ids]),
             'user_budgets': np.array([products_dict[pid]['user_budget'] for pid in product_ids]),
-            'risk_tolerances': np.array([products_dict[pid]['user_risk_tolerance'] for pid in product_ids]),
             'final_scores': np.array([products_dict[pid]['final_score'] for pid in product_ids])
         }
         
@@ -659,7 +720,7 @@ def demo_with_real_data(user_id: str = None, top_k: int = 50):
             
             print(f"\n📊 Financial Safety Distribution:")
             print(f"   🟢 GREEN (Safe & Affordable):  {green_count:3d} products ({100*green_count/len(safety_colors):.1f}%)")
-            print(f"   🟠 ORANGE (Risky/Stretched):   {orange_count:3d} products ({100*orange_count/len(safety_colors):.1f}%)")
+            print(f"   🟠 ORANGE (Stretched):        {orange_count:3d} products ({100*orange_count/len(safety_colors):.1f}%)")
             print(f"   🔴 RED (Unsafe/Unaffordable):  {red_count:3d} products ({100*red_count/len(safety_colors):.1f}%)")
             
             avg_score = np.mean(finance_metadata['final_scores'])
@@ -679,330 +740,6 @@ def demo_with_real_data(user_id: str = None, top_k: int = 50):
         print("  1. QDRANT_URL and QDRANT_API_KEY are set in .env")
         print("  2. Data has been inserted with generate_and_insert_data.py")
         print("  3. Qdrant Cloud cluster is running")
-
-
-def _normalize_coords(coords: np.ndarray, spread: float = 18.0) -> np.ndarray:
-    """Center and scale coordinates so they fit inside a predictable range."""
-    centered = coords - np.mean(coords, axis=0, keepdims=True)
-    max_abs = np.max(np.abs(centered)) or 1.0
-    return (centered / max_abs) * spread
-
-
-def _color_for_affordability(value: float) -> str:
-    """Map affordability score to brand colors used in the 2D chart."""
-    if value >= 0.4:
-        return "#2ecc71"
-    if value >= 0.2:
-        return "#f39c12"
-    return "#e74c3c"
-
-
-def build_experimental_terrain_payload(
-    client: "QdrantClient",
-    sample_size: int = 200,
-    random_seed: int = 42,
-    budget_override: Optional[float] = None,
-    user_risk_tolerance: float = 0.5,
-) -> Optional[Dict[str, Any]]:
-    """Construct a JSON-friendly payload for the React terrain component.
-
-    Pulls a lightweight sample of product embeddings directly from Qdrant,
-    projects them via UMAP, layers on procedural heights, and returns the
-    metadata required by the React Three Fiber canvas.
-    """
-    if client is None:
-        return None
-
-    try:
-        batch_limit = min(sample_size * 3, 1000)
-        points, _ = client.scroll(
-            collection_name=PRODUCTS_COLLECTION,
-            limit=batch_limit,
-            with_payload=True,
-            with_vectors=True,
-        )
-    except Exception as exc:
-        print(f"Failed to scroll Qdrant for terrain payload: {exc}")
-        return None
-
-    filtered_points = [p for p in points if p.vector is not None]
-    if len(filtered_points) < 4:
-        return None
-
-    rng = np.random.default_rng(random_seed)
-    take = min(sample_size, len(filtered_points))
-    selected_idx = rng.choice(len(filtered_points), size=take, replace=False)
-    selected_points = [filtered_points[idx] for idx in selected_idx]
-
-    embeddings = np.array([p.vector for p in selected_points], dtype=np.float32)
-    if embeddings.ndim != 2 or embeddings.shape[0] < 4:
-        return None
-
-    coords = project_embeddings_umap(embeddings, seed=random_seed)
-    normalized = _normalize_coords(coords)
-    bounds = {
-        "minX": float(np.min(normalized[:, 0])),
-        "maxX": float(np.max(normalized[:, 0])),
-        "minZ": float(np.min(normalized[:, 1])),
-        "maxZ": float(np.max(normalized[:, 1])),
-    }
-    span = max(bounds["maxX"] - bounds["minX"], bounds["maxZ"] - bounds["minZ"])
-    pad = max(span * 0.15, 2.0)
-    bounds["minX"] -= pad
-    bounds["maxX"] += pad
-    bounds["minZ"] -= pad
-    bounds["maxZ"] += pad
-
-    point_records = []
-    for idx, point in enumerate(selected_points):
-        payload = point.payload or {}
-        price = float(payload.get("price", 0.0) or 0.0)
-        available_balance = float(payload.get("available_balance", 0.0) or 0.0)
-        credit_limit = float(payload.get("credit_limit", 0.0) or 0.0)
-        budget_guess = available_balance + credit_limit
-        if budget_guess <= 0:
-            budget_guess = budget_override or max(price * 1.6, 1.0)
-
-        affordability = max(0.0, min(1.0, 1.0 - (price / (budget_guess + 1e-6))))
-        category = payload.get("categories")
-        if isinstance(category, list):
-            category = category[0] if category else "Unknown"
-
-        image_url = (
-            payload.get("image_url")
-            or payload.get("image")
-            or payload.get("thumbnail")
-            or payload.get("thumbnail_url")
-        )
-
-        score = float(payload.get("final_score") or payload.get("score") or rng.uniform(0.25, 0.95))
-
-        point_records.append(
-            {
-                "idx": idx,
-                "id": str(point.id),
-                "price": price,
-                "affordability": affordability,
-                "brand": payload.get("brand") or "Unknown",
-                "category": category or "Unknown",
-                "name": payload.get("name") or payload.get("title") or f"Product {idx + 1}",
-                "score": score,
-                "image_url": image_url,
-            }
-        )
-
-    if not point_records:
-        return None
-
-    price_array = np.array([rec["price"] for rec in point_records], dtype=np.float32)
-    price_min = float(price_array.min()) if price_array.size else 0.0
-    price_max = float(price_array.max()) if price_array.size else 0.0
-    price_span = max(price_max - price_min, 1e-6)
-    height_scale = 35.0
-
-    surface_points: List[Dict[str, Any]] = []
-    highlight_scores = []
-    for rec in point_records:
-        idx = rec["idx"]
-        price_norm = (rec["price"] - price_min) / price_span
-        shaped = (0.2 + price_norm) ** 1.35
-        height = float(shaped * height_scale)
-        surface_points.append(
-            {
-                "id": rec["id"],
-                "position": [
-                    float(normalized[idx, 0]),
-                    height,
-                    float(normalized[idx, 1]),
-                ],
-                "height": height,
-                "color": _color_for_affordability(rec["affordability"]),
-                "price": rec["price"],
-                "price_normalized": price_norm,
-                "brand": rec["brand"],
-                "category": rec["category"],
-                "name": rec["name"],
-                "score": rec["score"],
-                "risk_tolerance": user_risk_tolerance,
-                "imageUrl": rec.get("image_url"),
-            }
-        )
-        highlight_scores.append((rec["score"], idx))
-
-    highlight_scores.sort(reverse=True)
-    highlight_points = []
-    for rank, (_, idx) in enumerate(highlight_scores[:7], start=1):
-        point = surface_points[idx]
-        highlight_points.append(
-            {
-                "id": point["id"],
-                "label": f"#{rank} {point['name']}",
-                "position": point["position"],
-                "price": point["price"],
-                "brand": point["brand"],
-                "category": point["category"],
-                "score": point["score"],
-            }
-        )
-
-    payload = {
-        "points": surface_points,
-        "highlights": highlight_points,
-        "meta": {
-            "sample_size": len(surface_points),
-            "seed": random_seed,
-            "generated_at": time.time(),
-            "mode": "qdrant",
-            "price_range": {
-                "min": price_min,
-                "max": price_max,
-            },
-            "height_scale": height_scale,
-            "bounds": bounds,
-        },
-    }
-
-    return payload
-
-
-def build_search_result_terrain_payload(
-    *,
-    results: Sequence[Dict[str, Any]],
-    coords: np.ndarray,
-    user_risk_tolerance: float,
-    budget_override: Optional[float] = None,
-    random_seed: Optional[int] = None,
-) -> Optional[Dict[str, Any]]:
-    """Create a terrain payload directly from the active search results."""
-
-    if not results or coords is None:
-        return None
-
-    if coords.ndim != 2 or coords.shape[0] != len(results):
-        return None
-
-    normalized = _normalize_coords(coords)
-    rng = np.random.default_rng(random_seed or 0)
-
-    proto_points: List[Dict[str, Any]] = []
-    for idx, (result, position) in enumerate(zip(results, normalized)):
-        payload = result.get("payload", {}) or {}
-        price = float(payload.get("price") or 0.0)
-        available_balance = float(payload.get("available_balance") or 0.0)
-        credit_limit = float(payload.get("credit_limit") or 0.0)
-        budget_guess = budget_override if budget_override and budget_override > 0 else available_balance + credit_limit
-        if budget_guess <= 0:
-            budget_guess = max(price * 1.6, 1.0)
-
-        affordability = max(0.0, min(1.0, 1.0 - (price / (budget_guess + 1e-6))))
-        image_url = (
-            payload.get("image_url")
-            or payload.get("image")
-            or payload.get("thumbnail")
-            or payload.get("thumbnail_url")
-        )
-
-        proto_points.append(
-            {
-                "id": str(result.get("id", f"result-{idx}")),
-                "position": position,
-                "price": price,
-                "color": _color_for_affordability(affordability),
-                "brand": payload.get("brand") or "Unknown",
-                "category": (payload.get("categories") or ["Unknown"])[0]
-                if isinstance(payload.get("categories"), list)
-                else payload.get("category")
-                or payload.get("categories")
-                or "Unknown",
-                "name": payload.get("name")
-                or payload.get("title")
-                or payload.get("product_name")
-                or f"Product {idx + 1}",
-                "score": float(result.get("final_score") or payload.get("score") or rng.uniform(0.35, 0.92)),
-                "affordability": affordability,
-                "image_url": image_url,
-            }
-        )
-
-    if not proto_points:
-        return None
-
-    price_array = np.array([rec["price"] for rec in proto_points], dtype=np.float32)
-    price_min = float(price_array.min()) if price_array.size else 0.0
-    price_max = float(price_array.max()) if price_array.size else 0.0
-    price_span = max(price_max - price_min, 1e-6)
-    height_scale = 35.0
-
-    surface_points: List[Dict[str, Any]] = []
-    highlight_scores: List[Tuple[float, int]] = []
-    for idx, rec in enumerate(proto_points):
-        price_norm = (rec["price"] - price_min) / price_span
-        shaped = (0.2 + price_norm) ** 1.35
-        height = float(shaped * height_scale)
-        surface_points.append(
-            {
-                "id": rec["id"],
-                "position": [float(rec["position"][0]), height, float(rec["position"][1])],
-                "height": height,
-                "color": rec["color"],
-                "price": rec["price"],
-                "price_normalized": price_norm,
-                "brand": rec["brand"],
-                "category": rec["category"],
-                "name": rec["name"],
-                "score": rec["score"],
-                "risk_tolerance": user_risk_tolerance,
-                "imageUrl": rec.get("image_url"),
-            }
-        )
-        highlight_scores.append((rec["score"], idx))
-
-    highlight_scores.sort(reverse=True)
-    highlights = []
-    for rank, (_, idx) in enumerate(highlight_scores[:7], start=1):
-        point = surface_points[idx]
-        highlights.append(
-            {
-                "id": point["id"],
-                "label": f"#{rank} {point['name']}",
-                "position": point["position"],
-                "price": point["price"],
-                "brand": point["brand"],
-                "category": point["category"],
-                "score": point["score"],
-            }
-        )
-
-    xs = normalized[:, 0]
-    zs = normalized[:, 1]
-    bounds = {
-        "minX": float(xs.min()),
-        "maxX": float(xs.max()),
-        "minZ": float(zs.min()),
-        "maxZ": float(zs.max()),
-    }
-    span = max(bounds["maxX"] - bounds["minX"], bounds["maxZ"] - bounds["minZ"])
-    pad = max(span * 0.18, 1.5)
-    bounds["minX"] -= pad
-    bounds["maxX"] += pad
-    bounds["minZ"] -= pad
-    bounds["maxZ"] += pad
-
-    payload = {
-        "points": surface_points,
-        "highlights": highlights,
-        "meta": {
-            "sample_size": len(surface_points),
-            "seed": random_seed or 0,
-            "generated_at": time.time(),
-            "mode": "search_results",
-            "bounds": bounds,
-            "price_range": {"min": price_min, "max": price_max},
-            "height_scale": height_scale,
-        },
-    }
-
-    return payload
 
 
 if __name__ == "__main__":

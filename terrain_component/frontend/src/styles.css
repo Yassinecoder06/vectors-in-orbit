@@ -56,3 +56,340 @@ body,
 .highlight-row span {
   white-space: nowrap;
 }
+
+.product-label {
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #e2e8f0;
+  font-size: 2.625rem;
+  letter-spacing: 0.02em;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Control Indicators */
+.control-indicators {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #e2e8f0;
+  font-size: 0.7rem;
+  z-index: 100;
+}
+
+.control-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.control-title {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #93c5fd;
+  font-weight: 600;
+}
+
+.wasd-grid {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.key-row {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  background: rgba(51, 65, 85, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.25rem;
+  font-weight: 600;
+  font-size: 0.65rem;
+  transition: all 0.1s ease;
+}
+
+.key.active {
+  background: #3b82f6;
+  border-color: #60a5fa;
+  color: white;
+  transform: scale(0.95);
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+}
+
+.control-hint {
+  font-size: 0.55rem;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.altitude-keys {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.key-label {
+  font-size: 0.55rem;
+  color: #94a3b8;
+}
+
+.mouse-hints {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.6rem;
+  color: #cbd5e1;
+}
+
+/* Tour Panel */
+.tour-panel {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 280px;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(12px);
+  border-radius: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #e2e8f0;
+  z-index: 100;
+  overflow: hidden;
+}
+
+.tour-intro {
+  padding: 1.25rem;
+  text-align: center;
+}
+
+.tour-intro h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1rem;
+  color: #f1f5f9;
+}
+
+.tour-intro p {
+  margin: 0 0 1rem 0;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.tour-btn {
+  padding: 0.5rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.5rem;
+  background: rgba(51, 65, 85, 0.6);
+  color: #e2e8f0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tour-btn:hover:not(:disabled) {
+  background: rgba(71, 85, 105, 0.8);
+  border-color: rgba(148, 163, 184, 0.5);
+}
+
+.tour-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tour-btn-start {
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  border: none;
+  padding: 0.65rem 1.5rem;
+  font-size: 0.85rem;
+}
+
+.tour-btn-start:hover {
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+}
+
+.tour-btn-primary {
+  background: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.tour-btn-primary:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.tour-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: rgba(30, 41, 59, 0.8);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.tour-badge {
+  padding: 0.2rem 0.5rem;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tour-step {
+  flex: 1;
+  text-align: center;
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.tour-close {
+  width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(239, 68, 68, 0.2);
+  border: none;
+  border-radius: 50%;
+  color: #f87171;
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: all 0.15s ease;
+}
+
+.tour-close:hover {
+  background: rgba(239, 68, 68, 0.4);
+}
+
+.tour-content {
+  padding: 1rem;
+}
+
+.tour-content h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.95rem;
+}
+
+.tour-content p {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
+.tour-content kbd {
+  padding: 0.15rem 0.35rem;
+  background: rgba(51, 65, 85, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.25rem;
+  font-family: inherit;
+  font-size: 0.7rem;
+}
+
+.tour-product {
+  padding: 1rem;
+}
+
+.tour-product-image {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.tour-product-info h4 {
+  margin: 0 0 0.35rem 0;
+  font-size: 0.9rem;
+  color: #f1f5f9;
+}
+
+.tour-product-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.tour-price {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #4ade80;
+}
+
+.tour-brand {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  padding: 0.15rem 0.4rem;
+  background: rgba(51, 65, 85, 0.6);
+  border-radius: 999px;
+}
+
+.tour-description {
+  font-size: 0.75rem;
+  color: #cbd5e1;
+  line-height: 1.4;
+  margin: 0 0 0.5rem 0;
+}
+
+.tour-category {
+  display: inline-block;
+  font-size: 0.65rem;
+  color: #93c5fd;
+  padding: 0.15rem 0.4rem;
+  background: rgba(59, 130, 246, 0.15);
+  border-radius: 999px;
+}
+
+.tour-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: rgba(30, 41, 59, 0.6);
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.tour-progress {
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.tour-dots {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.tour-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.3);
+  transition: all 0.2s ease;
+}
+
+.tour-dot.active {
+  background: #3b82f6;
+  transform: scale(1.2);
+}

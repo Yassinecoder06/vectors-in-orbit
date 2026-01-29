@@ -1,7 +1,11 @@
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Stars, Billboard, useTexture } from "@react-three/drei";
-import { useEffect, useMemo } from "react";
+import { OrbitControls, Stars, Billboard, useTexture, Html } from "@react-three/drei";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
+import KeyboardControls from "./KeyboardControls";
+import CameraFocus from "./CameraFocus";
+import ControlIndicators from "./ControlIndicators";
+import TourPanel from "./TourPanel";
 import {
   Streamlit,
   withStreamlitConnection,
@@ -86,6 +90,13 @@ const generateProceduralPayload = (seed = 1337): TerrainPayload => {
       height_scale: 18,
     },
   };
+};
+
+const truncateLabel = (value: string, maxLength = 22) => {
+  if (!value) {
+    return "";
+  }
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
 };
 
 const DEFAULT_BOUNDS: TerrainBounds = { minX: -20, maxX: 20, minZ: -20, maxZ: 20 };
@@ -244,10 +255,23 @@ const TerrainSurface = ({
   );
 };
 
-const ProductMarkers = ({ points }: { points: TerrainPoint[] }) => (
+const ProductMarkers = ({
+  points,
+  onSelect,
+}: {
+  points: TerrainPoint[];
+  onSelect: (point: TerrainPoint) => void;
+}) => (
   <group>
     {points.map((point) => (
-      <mesh key={point.id} position={[point.position[0], point.height + 0.2, point.position[2]]}>
+      <mesh
+        key={point.id}
+        position={[point.position[0], point.height + 0.2, point.position[2]]}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect(point);
+        }}
+      >
         <sphereGeometry args={[0.18, 18, 18]} />
         <meshStandardMaterial color={point.color} emissive={point.color} emissiveIntensity={0.15} />
       </mesh>
@@ -255,37 +279,82 @@ const ProductMarkers = ({ points }: { points: TerrainPoint[] }) => (
   </group>
 );
 
-const ProductBillboard = ({ point }: { point: TerrainPoint }) => {
+const ProductBillboard = ({
+  point,
+  onSelect,
+}: {
+  point: TerrainPoint;
+  onSelect: (point: TerrainPoint) => void;
+}) => {
   const texture = useTexture(point.imageUrl!, (tex) => {
     tex.anisotropy = 8;
   });
 
-  const size = THREE.MathUtils.clamp(1.2 + (point.price_normalized ?? 0) * 1.4, 1.1, 2.4);
+  const size = THREE.MathUtils.clamp(1.6 + (point.price_normalized ?? 0) * 1.8, 1.5, 3.2) * 3.5;
   const baseLift = size * 0.75 + 0.6;
   const imageOffset = size * 0.25;
-  const tagOffset = size * 0.4 + 0.08;
-
   return (
-    <Billboard position={[point.position[0], point.height + baseLift, point.position[2]]} follow>
-      <mesh position={[0, imageOffset, 0]}>
+    <Billboard
+      position={[point.position[0], point.height + baseLift, point.position[2]]}
+      follow
+    >
+      <mesh
+        position={[0, imageOffset, 0]}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect(point);
+        }}
+      >
         <planeGeometry args={[size, size * 0.75]} />
         <meshBasicMaterial map={texture} transparent side={THREE.DoubleSide} depthTest={false} />
-      </mesh>
-      <mesh position={[0, -tagOffset, 0]} scale={[size * 0.8, 0.08, 1]}>
-        <planeGeometry args={[1, 1]} />
-        <meshBasicMaterial color={point.color} opacity={0.85} transparent depthTest={false} />
       </mesh>
     </Billboard>
   );
 };
 
-const ProductBillboards = ({ points }: { points: TerrainPoint[] }) => (
+const ProductBillboards = ({
+  points,
+  onSelect,
+}: {
+  points: TerrainPoint[];
+  onSelect: (point: TerrainPoint) => void;
+}) => (
   <group>
     {points
       .filter((p) => !!p.imageUrl)
       .map((p) => (
-        <ProductBillboard key={`billboard-${p.id}`} point={p} />
+        <ProductBillboard key={`billboard-${p.id}`} point={p} onSelect={onSelect} />
       ))}
+  </group>
+);
+
+const ProductLabels = ({
+  points,
+  onSelect,
+}: {
+  points: TerrainPoint[];
+  onSelect: (point: TerrainPoint) => void;
+}) => (
+  <group>
+    {points.map((point) => (
+      <Billboard
+        key={`label-${point.id}`}
+        position={[point.position[0], point.height + 0.9, point.position[2]]}
+        follow
+      >
+        <Html center transform distanceFactor={8} style={{ pointerEvents: "auto" }}>
+          <div
+            className="product-label"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect(point);
+            }}
+          >
+            {truncateLabel(point.name)}
+          </div>
+        </Html>
+      </Billboard>
+    ))}
   </group>
 );
 
@@ -320,13 +389,30 @@ const NarrationPanel = ({ payload }: { payload: TerrainPayload }) => {
   );
 };
 
-function Scene({ payload }: { payload: TerrainPayload }) {
+function Scene({
+  payload,
+  onSelect,
+  focusPosition,
+  onFocusComplete,
+}: {
+  payload: TerrainPayload;
+  onSelect: (point: TerrainPoint) => void;
+  focusPosition: [number, number, number] | null;
+  onFocusComplete?: () => void;
+}) {
   const bounds = useMemo(() => deriveBounds(payload), [payload]);
   const highlightPoints = useMemo(
     () => payload.highlights.map((highlight) => payload.points.find((p) => p.id === highlight.id)).filter(Boolean) as TerrainPoint[],
     [payload]
   );
   const meshSeed = payload.meta?.seed ?? 1337;
+
+  // Ref for OrbitControls to enable keyboard navigation
+  const orbitControlsRef = useRef<{
+    target: THREE.Vector3;
+    update: () => void;
+    object: THREE.Camera;
+  } | null>(null);
 
   const width = Math.max(bounds.maxX - bounds.minX, 1);
   const depth = Math.max(bounds.maxZ - bounds.minZ, 1);
@@ -350,15 +436,33 @@ function Scene({ payload }: { payload: TerrainPayload }) {
       <pointLight position={[-20, 15, -10]} intensity={0.5} />
       <Stars radius={80} depth={40} factor={4} fade speed={0.4} />
       <TerrainSurface points={payload.points} bounds={bounds} seed={meshSeed} />
-      <ProductMarkers points={payload.points} />
-      <ProductBillboards points={payload.points} />
+      <ProductMarkers points={payload.points} onSelect={onSelect} />
+      <ProductBillboards points={payload.points} onSelect={onSelect} />
+      <ProductLabels points={payload.points} onSelect={onSelect} />
       <HighlightMarkers points={highlightPoints} />
       <OrbitControls
+        ref={orbitControlsRef as any}
         target={orbitTarget}
-        enablePan={false}
+        enablePan={true}
+        enableZoom={true}
+        enableRotate={true}
         maxDistance={diag * 4}
-        minDistance={diag * 0.6}
+        minDistance={diag * 0.3}
         maxPolarAngle={Math.PI / 2.05}
+        enableDamping
+        dampingFactor={0.05}
+      />
+      {/* WASD keyboard navigation */}
+      <KeyboardControls
+        enabled={true}
+        moveSpeed={diag * 0.02}
+        orbitControlsRef={orbitControlsRef}
+      />
+      {/* Smooth camera focus animation */}
+      <CameraFocus
+        focusPosition={focusPosition}
+        orbitControlsRef={orbitControlsRef}
+        onFocusComplete={onFocusComplete}
       />
     </Canvas>
   );
@@ -373,14 +477,125 @@ const TerrainApp = (props: ComponentProps) => {
     return generateProceduralPayload();
   }, [rawPayload]);
 
+  // Tour state
+  const [tourActive, setTourActive] = useState(false);
+  const [tourStep, setTourStep] = useState(0); // 0 = intro, 1-N = products, N+1 = outro
+  const [focusPosition, setFocusPosition] = useState<[number, number, number] | null>(null);
+
+  // Get tour products from highlights
+  const tourProducts = useMemo(() => {
+    return payload.highlights
+      .map((h) => payload.points.find((p) => p.id === h.id))
+      .filter(Boolean) as TerrainPoint[];
+  }, [payload]);
+
+  const totalSteps = tourProducts.length;
+
+  // Get current tour product
+  const currentTourProduct = useMemo(() => {
+    if (!tourActive || tourStep < 1 || tourStep > totalSteps) return null;
+    return tourProducts[tourStep - 1] || null;
+  }, [tourActive, tourStep, tourProducts, totalSteps]);
+
+  // Focus camera on current tour product
+  useEffect(() => {
+    if (currentTourProduct) {
+      setFocusPosition([
+        currentTourProduct.position[0],
+        currentTourProduct.height,
+        currentTourProduct.position[2],
+      ]);
+    }
+  }, [currentTourProduct]);
+
+  // Tour navigation handlers
+  const handleTourStart = useCallback(() => {
+    setTourActive(true);
+    setTourStep(0);
+  }, []);
+
+  const handleTourEnd = useCallback(() => {
+    setTourActive(false);
+    setTourStep(0);
+    setFocusPosition(null);
+  }, []);
+
+  const handleTourNext = useCallback(() => {
+    if (tourStep > totalSteps) {
+      handleTourEnd();
+    } else {
+      setTourStep((prev) => prev + 1);
+    }
+  }, [tourStep, totalSteps, handleTourEnd]);
+
+  const handleTourPrevious = useCallback(() => {
+    setTourStep((prev) => Math.max(0, prev - 1));
+  }, []);
+
+  // Handle keyboard navigation for tour
+  useEffect(() => {
+    if (!tourActive) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' || e.key === 'n') {
+        handleTourNext();
+      } else if (e.key === 'ArrowLeft' || e.key === 'p') {
+        handleTourPrevious();
+      } else if (e.key === 'Escape') {
+        handleTourEnd();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [tourActive, handleTourNext, handleTourPrevious, handleTourEnd]);
+
+  const handleSelect = (point: TerrainPoint) => {
+    // Focus camera on selected point
+    setFocusPosition([point.position[0], point.height, point.position[2]]);
+    
+    Streamlit.setComponentValue({
+      id: point.id,
+      name: point.name,
+      description: point.description ?? "",
+      price: point.price,
+      brand: point.brand,
+      category: point.category,
+      imageUrl: point.imageUrl,
+      score: point.score,
+      risk_tolerance: point.risk_tolerance,
+    });
+  };
+
+  const handleFocusComplete = useCallback(() => {
+    // Optional: auto-clear focus after animation
+  }, []);
+
   useEffect(() => {
     Streamlit.setFrameHeight();
   }, [payload, props.width]);
 
   return (
     <div className="terrain-shell">
-      <Scene payload={payload} />
+      <Scene 
+        payload={payload} 
+        onSelect={handleSelect}
+        focusPosition={focusPosition}
+        onFocusComplete={handleFocusComplete}
+      />
       <NarrationPanel payload={payload} />
+      <ControlIndicators visible={!tourActive} />
+      <TourPanel
+        tourActive={tourActive}
+        currentStep={tourStep}
+        totalSteps={totalSteps}
+        currentProduct={currentTourProduct}
+        onNext={handleTourNext}
+        onPrevious={handleTourPrevious}
+        onStart={handleTourStart}
+        onEnd={handleTourEnd}
+        highlights={payload.highlights}
+      />
     </div>
   );
 };
