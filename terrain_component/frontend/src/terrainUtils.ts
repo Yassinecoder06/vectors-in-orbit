@@ -93,6 +93,7 @@ export interface TerrainConfig {
 /**
  * Generate mountains from product positions
  * Products at higher ranks (better matches) become taller peaks
+ * Best product is placed at the central peak
  */
 export function generateMountainsFromProducts(
   points: TerrainPoint[],
@@ -101,44 +102,61 @@ export function generateMountainsFromProducts(
   const mountains: Mountain[] = [];
   const hills: Mountain[] = [];
   
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+  
+  // Always create the main central mountain peak - reduced height
+  mountains.push({
+    x: centerX,
+    z: centerZ,
+    height: 18, // Reduced from 28
+    radius: 35,
+    slopeFactor: 0.5,
+  });
+  
   if (points.length === 0) {
-    // Default central mountain
-    mountains.push({
-      x: 0,
-      z: 0,
-      height: 20,
-      radius: 25,
-      slopeFactor: 0.6,
-    });
     return { mountains, hills };
   }
   
   // Sort by rank (best first)
   const sortedPoints = [...points].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
   
-  // Top products become main mountain peaks
-  const topProducts = sortedPoints.slice(0, Math.min(8, sortedPoints.length));
-  const restProducts = sortedPoints.slice(Math.min(8, sortedPoints.length));
+  // Best product gets a peak at the very center (on top of the mountain)
+  // Other top products become secondary peaks around the main one
+  const topProducts = sortedPoints.slice(0, Math.min(6, sortedPoints.length));
+  const restProducts = sortedPoints.slice(Math.min(6, sortedPoints.length));
   
   topProducts.forEach((point, idx) => {
-    const rankFactor = 1 - idx / Math.max(topProducts.length - 1, 1);
-    mountains.push({
-      x: point.position[0],
-      z: point.position[2],
-      height: 8 + rankFactor * 18, // Height 8-26 based on rank
-      radius: 12 + rankFactor * 8, // Radius 12-20
-      slopeFactor: 0.5 + rankFactor * 0.3, // Sharper peaks for top items
-    });
+    if (idx === 0) {
+      // Best product - add extra peak at center summit matching product height
+      mountains.push({
+        x: centerX,
+        z: centerZ,
+        height: point.height + 2, // Match the product height plus small buffer
+        radius: 6,
+        slopeFactor: 0.8, // Sharp peak
+      });
+    } else {
+      // Other top products - secondary peaks around center
+      const rankFactor = 1 - idx / Math.max(topProducts.length - 1, 1);
+      mountains.push({
+        x: point.position[0],
+        z: point.position[2],
+        height: point.height + 1, // Match product height
+        radius: 8 + rankFactor * 4,
+        slopeFactor: 0.5 + rankFactor * 0.2,
+      });
+    }
   });
   
-  // Rest become smaller hills
+  // Rest become smaller hills on the slopes
   restProducts.forEach((point, idx) => {
     hills.push({
       x: point.position[0],
       z: point.position[2],
-      height: 3 + point.height * 0.3,
-      radius: 6 + Math.random() * 4,
-      slopeFactor: 0.7,
+      height: point.height * 0.8, // Slightly below product
+      radius: 4 + Math.random() * 2,
+      slopeFactor: 0.6,
     });
   });
   
@@ -146,7 +164,7 @@ export function generateMountainsFromProducts(
 }
 
 /**
- * Generate river path through low-elevation areas
+ * Generate river path around the mountain perimeter (not through it)
  */
 export function generateRiverPath(
   mountains: Mountain[],
@@ -160,49 +178,28 @@ export function generateRiverPath(
   const centerZ = (bounds.minZ + bounds.maxZ) / 2;
   const width = bounds.maxX - bounds.minX;
   const depth = bounds.maxZ - bounds.minZ;
+  const radius = Math.min(width, depth) / 2;
   
-  // Create winding river from one corner through the center to opposite corner
+  // Create river that flows around the mountain at the outer edge
   const points: RiverPoint[] = [];
-  const segments = 12;
+  const segments = 24; // More segments for smoother curve
+  const riverRadius = radius * 0.85; // River flows at 85% of terrain radius
+  
+  // River flows in an arc around the bottom/sides of the mountain (not a full circle)
+  const startAngle = Math.PI * 0.6;  // Start from lower-left
+  const endAngle = Math.PI * 2.4;    // End at lower-right (wrapping around bottom)
   
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
+    const angle = startAngle + t * (endAngle - startAngle);
     
-    // Start NW, wind through center, end SE
-    const baseX = centerX + (t - 0.5) * width * 0.9;
-    const baseZ = centerZ + (0.5 - t) * depth * 0.9;
+    // Add some natural winding variation
+    const radiusVariation = riverRadius + Math.sin(t * Math.PI * 4) * (radius * 0.05);
     
-    // Add sinusoidal winding
-    const winding = Math.sin(t * Math.PI * 2.5) * (width * 0.15);
+    const x = centerX + Math.cos(angle) * radiusVariation;
+    const z = centerZ + Math.sin(angle) * radiusVariation;
     
-    // Find lowest nearby point (avoid mountain peaks)
-    let bestX = baseX + winding;
-    let bestZ = baseZ;
-    let lowestInfluence = Infinity;
-    
-    for (let dx = -10; dx <= 10; dx += 5) {
-      for (let dz = -10; dz <= 10; dz += 5) {
-        const testX = baseX + dx;
-        const testZ = baseZ + dz;
-        
-        // Calculate mountain influence at this point
-        let influence = 0;
-        mountains.forEach(m => {
-          const dist = Math.sqrt((testX - m.x) ** 2 + (testZ - m.z) ** 2);
-          if (dist < m.radius * 1.5) {
-            influence += m.height * Math.exp(-dist / m.radius);
-          }
-        });
-        
-        if (influence < lowestInfluence) {
-          lowestInfluence = influence;
-          bestX = testX;
-          bestZ = testZ;
-        }
-      }
-    }
-    
-    points.push({ x: bestX, z: bestZ });
+    points.push({ x, z });
   }
   
   return points;
@@ -287,37 +284,42 @@ export function buildHeightGrid(config: TerrainConfig): Float32Array {
         elevation += hillHeight * factor;
       });
       
-      // Carve river through terrain
+      // Carve river around the terrain perimeter (not through the mountain)
       if (riverPoints && riverPoints.length > 1) {
         for (let k = 0; k < riverPoints.length - 1; k++) {
           const p1 = riverPoints[k];
           const p2 = riverPoints[k + 1];
           const dist = distanceToLineSegment(x, z, p1.x, p1.z, p2.x, p2.z);
           
-          const riverWidth = 3.5;
-          const bankWidth = riverWidth * 2;
+          const riverWidth = 4;
+          const bankWidth = riverWidth * 2.5;
           
-          if (dist < bankWidth) {
-            if (dist < riverWidth * 0.6) {
+          // Only carve river in the outer area (not near center mountain)
+          const distFromTerrainCenter = Math.sqrt(x * x + z * z);
+          const isOuterArea = distFromTerrainCenter > radius * 0.6;
+          
+          if (dist < bankWidth && isOuterArea) {
+            if (dist < riverWidth * 0.5) {
               // River center - below water level
-              elevation = Math.min(elevation, -1.2);
+              elevation = Math.min(elevation, -1.0);
             } else if (dist < riverWidth) {
               // River bed transition
-              const t = (dist - riverWidth * 0.6) / (riverWidth * 0.4);
-              elevation = Math.min(elevation, -1.2 + t * 1.5);
+              const t = (dist - riverWidth * 0.5) / (riverWidth * 0.5);
+              elevation = Math.min(elevation, -1.0 + t * 1.2);
             } else {
               // River banks - gentle slope down
               const t = (dist - riverWidth) / (bankWidth - riverWidth);
-              const bankFactor = 1 - (1 - t) * 0.4;
+              const bankFactor = 1 - (1 - t) * 0.3;
               elevation *= bankFactor;
             }
           }
         }
       }
       
-      // Ensure edges go to water level for circular terrain
-      if (circularBoundary && distFromCenter > radius * 0.95) {
-        elevation = Math.min(elevation, -1.5);
+      // Ensure edges go to water level for circular terrain (ocean around the island)
+      if (circularBoundary && distFromCenter > radius * 0.92) {
+        const edgeFactor = (distFromCenter - radius * 0.92) / (radius * 0.08);
+        elevation = elevation * (1 - edgeFactor) + (-1.5) * edgeFactor;
       }
       
       grid[idx] = elevation;

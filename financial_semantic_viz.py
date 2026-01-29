@@ -574,18 +574,23 @@ def build_search_result_terrain_payload(
         rank_normalized = rank / max(n_products - 1, 1)  # 0 = best, 1 = worst
         
         # Distance from center increases with worse rank
-        # Best match (rank 0) is at center, worst is at edge
-        distance = rank_normalized * 50  # Max distance of 50 units from center (expanded from 35)
-        
-        # Angle around the center (spiral pattern)
-        angle = rank * 2.4 + np.random.uniform(-0.3, 0.3)  # Golden angle approximation + jitter
-        
-        x = distance * np.cos(angle) + np.random.uniform(-3, 3)
-        z = distance * np.sin(angle) + np.random.uniform(-3, 3)
+        # Best match (rank 0) is at the very center (mountain peak), worst is at edge
+        if rank == 0:
+            # Best product at the exact center - the summit
+            distance = 0
+            x = 0
+            z = 0
+        else:
+            # Other products spiral outward from the peak
+            distance = 5 + rank_normalized * 45  # Start 5 units from center, max 50 units
+            # Angle around the center (spiral pattern)
+            angle = rank * 2.4 + np.random.uniform(-0.3, 0.3)  # Golden angle approximation + jitter
+            x = distance * np.cos(angle) + np.random.uniform(-2, 2)
+            z = distance * np.sin(angle) + np.random.uniform(-2, 2)
         
         # Height based on score - best matches are highest (mountain peak)
-        # Scale height: best match = 25, worst = 3 (increased range for more dramatic mountain)
-        height = 3 + (1 - rank_normalized) * 22  # Higher rank = higher position
+        # Scale height: best match = 20 (summit), worst = 2 (reduced for smaller mountain)
+        height = 2 + (1 - rank_normalized) * 18  # Higher rank = higher position
         
         # Price normalized for size calculations
         price_normalized = (price - min_price) / max(max_price - min_price, 1) if max_price > min_price else 0.5

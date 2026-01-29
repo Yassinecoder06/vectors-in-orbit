@@ -280,17 +280,17 @@ const RiverMesh = ({ riverPoints, bounds }: { riverPoints: RiverPoint[]; bounds:
   );
 };
 
+// Height sampling function type
+type HeightSampler = (x: number, z: number) => number;
+
 // Main terrain surface using the new terrain generation system
-const TerrainSurface = ({
-  points,
-  bounds,
-  seed,
-}: {
-  points: TerrainPoint[];
-  bounds: TerrainBounds;
-  seed: number;
-}) => {
-  const { geometry, riverPoints } = useMemo(() => {
+// Returns height sampler function for products to use
+const useTerrainData = (
+  points: TerrainPoint[],
+  bounds: TerrainBounds,
+  seed: number
+) => {
+  return useMemo(() => {
     const width = Math.max(bounds.maxX - bounds.minX, 80);
     const depth = Math.max(bounds.maxZ - bounds.minZ, 80);
     const terrainSize = Math.max(width, depth) * 1.3;
@@ -300,7 +300,7 @@ const TerrainSurface = ({
     // Generate mountains from product positions
     const { mountains, hills } = generateMountainsFromProducts(points, bounds);
     
-    // Generate river through low areas
+    // Generate river around the mountain
     const riverPoints = generateRiverPath(mountains, {
       minX: centerX - terrainSize / 2,
       maxX: centerX + terrainSize / 2,
@@ -328,9 +328,38 @@ const TerrainSurface = ({
     // Offset geometry to terrain center
     geometry.translate(centerX, 0, centerZ);
     
-    return { geometry, riverPoints: riverPoints.map(p => ({ x: p.x + centerX, z: p.z + centerZ })) };
+    // Create height sampler function that samples the actual terrain
+    const sampleHeight: HeightSampler = (worldX: number, worldZ: number) => {
+      // Convert world coords to local terrain coords
+      const localX = worldX - centerX;
+      const localZ = worldZ - centerZ;
+      return sampleTerrainHeight(heightGrid, localX, localZ, terrainSize, terrainSize, TERRAIN_RESOLUTION);
+    };
+    
+    // Adjust river points to world coordinates
+    const worldRiverPoints = riverPoints.map(p => ({ x: p.x + centerX, z: p.z + centerZ }));
+    
+    return { 
+      geometry, 
+      riverPoints: worldRiverPoints, 
+      sampleHeight,
+      terrainSize,
+      centerX,
+      centerZ,
+    };
   }, [points, bounds, seed]);
+};
 
+// Main terrain surface component
+const TerrainSurface = ({
+  geometry,
+  riverPoints,
+  bounds,
+}: {
+  geometry: THREE.BufferGeometry;
+  riverPoints: RiverPoint[];
+  bounds: TerrainBounds;
+}) => {
   useEffect(() => {
     return () => {
       geometry?.dispose();
@@ -350,44 +379,57 @@ const TerrainSurface = ({
 const ProductMarkers = ({
   points,
   onSelect,
+  sampleHeight,
 }: {
   points: TerrainPoint[];
   onSelect: (point: TerrainPoint) => void;
+  sampleHeight: HeightSampler;
 }) => (
   <group>
-    {points.map((point) => (
-      <mesh
-        key={point.id}
-        position={[point.position[0], point.height + 0.2, point.position[2]]}
-        onClick={(event) => {
-          event.stopPropagation();
-          onSelect(point);
-        }}
-      >
-        <sphereGeometry args={[0.18, 18, 18]} />
-        <meshStandardMaterial color={point.color} emissive={point.color} emissiveIntensity={0.15} />
-      </mesh>
-    ))}
+    {points.map((point) => {
+      // Sample actual terrain height at product position
+      const terrainHeight = sampleHeight(point.position[0], point.position[2]);
+      const y = Math.max(terrainHeight, point.height) + 0.3; // Use higher of terrain or product height
+      return (
+        <mesh
+          key={point.id}
+          position={[point.position[0], y, point.position[2]]}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect(point);
+          }}
+        >
+          <sphereGeometry args={[0.18, 18, 18]} />
+          <meshStandardMaterial color={point.color} emissive={point.color} emissiveIntensity={0.15} />
+        </mesh>
+      );
+    })}
   </group>
 );
 
 const ProductBillboard = ({
   point,
   onSelect,
+  sampleHeight,
 }: {
   point: TerrainPoint;
   onSelect: (point: TerrainPoint) => void;
+  sampleHeight: HeightSampler;
 }) => {
   const texture = useTexture(point.imageUrl!, (tex) => {
     tex.anisotropy = 8;
   });
 
+  // Sample actual terrain height
+  const terrainHeight = sampleHeight(point.position[0], point.position[2]);
+  const baseY = Math.max(terrainHeight, point.height);
+  
   const size = THREE.MathUtils.clamp(1.6 + (point.price_normalized ?? 0) * 1.8, 1.5, 3.2) * 3.5;
   const baseLift = size * 0.75 + 0.6;
   const imageOffset = size * 0.25;
   return (
     <Billboard
-      position={[point.position[0], point.height + baseLift, point.position[2]]}
+      position={[point.position[0], baseY + baseLift, point.position[2]]}
       follow
     >
       <mesh
@@ -407,15 +449,17 @@ const ProductBillboard = ({
 const ProductBillboards = ({
   points,
   onSelect,
+  sampleHeight,
 }: {
   points: TerrainPoint[];
   onSelect: (point: TerrainPoint) => void;
+  sampleHeight: HeightSampler;
 }) => (
   <group>
     {points
       .filter((p) => !!p.imageUrl)
       .map((p) => (
-        <ProductBillboard key={`billboard-${p.id}`} point={p} onSelect={onSelect} />
+        <ProductBillboard key={`billboard-${p.id}`} point={p} onSelect={onSelect} sampleHeight={sampleHeight} />
       ))}
   </group>
 );
@@ -423,30 +467,36 @@ const ProductBillboards = ({
 const ProductLabels = ({
   points,
   onSelect,
+  sampleHeight,
 }: {
   points: TerrainPoint[];
   onSelect: (point: TerrainPoint) => void;
+  sampleHeight: HeightSampler;
 }) => (
   <group>
-    {points.map((point) => (
-      <Billboard
-        key={`label-${point.id}`}
-        position={[point.position[0], point.height + 0.9, point.position[2]]}
-        follow
-      >
-        <Html center transform distanceFactor={8} style={{ pointerEvents: "auto" }}>
-          <div
-            className="product-label"
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelect(point);
-            }}
-          >
-            {truncateLabel(point.name)}
-          </div>
-        </Html>
-      </Billboard>
-    ))}
+    {points.map((point) => {
+      const terrainHeight = sampleHeight(point.position[0], point.position[2]);
+      const y = Math.max(terrainHeight, point.height) + 1.2;
+      return (
+        <Billboard
+          key={`label-${point.id}`}
+          position={[point.position[0], y, point.position[2]]}
+          follow
+        >
+          <Html center transform distanceFactor={8} style={{ pointerEvents: "auto" }}>
+            <div
+              className="product-label"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelect(point);
+              }}
+            >
+              {truncateLabel(point.name)}
+            </div>
+          </Html>
+        </Billboard>
+      );
+    })}
   </group>
 );
 
@@ -597,12 +647,14 @@ function Scene({
   focusPosition,
   onFocusComplete,
   showQueryPath,
+  terrainData,
 }: {
   payload: TerrainPayload;
   onSelect: (point: TerrainPoint) => void;
   focusPosition: [number, number, number] | null;
   onFocusComplete?: () => void;
   showQueryPath?: boolean;
+  terrainData: ReturnType<typeof useTerrainData>;
 }) {
   const bounds = useMemo(() => deriveBounds(payload), [payload]);
   const highlightPoints = useMemo(
@@ -610,6 +662,9 @@ function Scene({
     [payload]
   );
   const meshSeed = payload.meta?.seed ?? 1337;
+  
+  // Use terrain data from props
+  const { geometry, riverPoints, sampleHeight } = terrainData;
 
   // Ref for OrbitControls to enable keyboard navigation
   const orbitControlsRef = useRef<{
@@ -641,13 +696,13 @@ function Scene({
       <pointLight position={[-30, 25, -20]} intensity={0.4} color="#fff5e6" />
       <hemisphereLight color="#87CEEB" groundColor="#228B22" intensity={0.3} />
       <SkyDecoration bounds={bounds} seed={meshSeed} />
-      <TerrainSurface points={payload.points} bounds={bounds} seed={meshSeed} />
+      <TerrainSurface geometry={geometry} riverPoints={riverPoints} bounds={bounds} />
       <ForestDecoration bounds={bounds} seed={meshSeed} />
       {/* Query path showing the journey through ranked products */}
-      <QueryPath points={payload.points} visible={showQueryPath ?? true} />
-      <ProductMarkers points={payload.points} onSelect={onSelect} />
-      <ProductBillboards points={payload.points} onSelect={onSelect} />
-      <ProductLabels points={payload.points} onSelect={onSelect} />
+      <QueryPath points={payload.points} visible={showQueryPath ?? true} sampleHeight={sampleHeight} />
+      <ProductMarkers points={payload.points} onSelect={onSelect} sampleHeight={sampleHeight} />
+      <ProductBillboards points={payload.points} onSelect={onSelect} sampleHeight={sampleHeight} />
+      <ProductLabels points={payload.points} onSelect={onSelect} sampleHeight={sampleHeight} />
       <HighlightMarkers points={highlightPoints} />
       <OrbitControls
         ref={orbitControlsRef as any}
@@ -686,6 +741,14 @@ const TerrainApp = (props: ComponentProps) => {
     return generateProceduralPayload();
   }, [rawPayload]);
 
+  // Compute terrain bounds early so we can create height sampler at this level
+  const bounds = useMemo(() => deriveBounds(payload), [payload]);
+  const meshSeed = payload.meta?.seed ?? 1337;
+  
+  // Create terrain data including sampleHeight at this level so tour can use it
+  const terrainData = useTerrainData(payload.points, bounds, meshSeed);
+  const { sampleHeight } = terrainData;
+
   // Tour state
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState(0); // 0 = intro, 1-N = products, N+1 = outro
@@ -706,16 +769,18 @@ const TerrainApp = (props: ComponentProps) => {
     return tourProducts[tourStep - 1] || null;
   }, [tourActive, tourStep, tourProducts, totalSteps]);
 
-  // Focus camera on current tour product
+  // Focus camera on current tour product - using terrain-sampled height
   useEffect(() => {
     if (currentTourProduct) {
+      const terrainHeight = sampleHeight(currentTourProduct.position[0], currentTourProduct.position[2]);
+      const y = Math.max(terrainHeight, currentTourProduct.height);
       setFocusPosition([
         currentTourProduct.position[0],
-        currentTourProduct.height,
+        y,
         currentTourProduct.position[2],
       ]);
     }
-  }, [currentTourProduct]);
+  }, [currentTourProduct, sampleHeight]);
 
   // Tour navigation handlers
   const handleTourStart = useCallback(() => {
@@ -760,8 +825,10 @@ const TerrainApp = (props: ComponentProps) => {
   }, [tourActive, handleTourNext, handleTourPrevious, handleTourEnd]);
 
   const handleSelect = (point: TerrainPoint) => {
-    // Focus camera on selected point
-    setFocusPosition([point.position[0], point.height, point.position[2]]);
+    // Focus camera on selected point using terrain-sampled height
+    const terrainHeight = sampleHeight(point.position[0], point.position[2]);
+    const y = Math.max(terrainHeight, point.height);
+    setFocusPosition([point.position[0], y, point.position[2]]);
     
     Streamlit.setComponentValue({
       id: point.id,
@@ -792,6 +859,7 @@ const TerrainApp = (props: ComponentProps) => {
         focusPosition={focusPosition}
         onFocusComplete={handleFocusComplete}
         showQueryPath={true}
+        terrainData={terrainData}
       />
       <NarrationPanel payload={payload} />
       <ControlIndicators visible={!tourActive} />

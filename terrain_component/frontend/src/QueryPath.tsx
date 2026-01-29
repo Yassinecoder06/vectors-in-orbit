@@ -3,9 +3,13 @@ import * as THREE from "three";
 import { Line } from "@react-three/drei";
 import type { TerrainPoint } from "./types";
 
+// Height sampler function type
+type HeightSampler = (x: number, z: number) => number;
+
 interface QueryPathProps {
   points: TerrainPoint[];
   visible?: boolean;
+  sampleHeight?: HeightSampler;
 }
 
 /**
@@ -17,7 +21,7 @@ interface QueryPathProps {
  * - Lifted slightly above terrain to avoid z-fighting
  * - Smooth curve through all product positions
  */
-const QueryPath = ({ points, visible = true }: QueryPathProps) => {
+const QueryPath = ({ points, visible = true, sampleHeight }: QueryPathProps) => {
   // Sort points by rank (they should already be sorted, but ensure it)
   const sortedPoints = useMemo(() => {
     return [...points].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
@@ -38,11 +42,17 @@ const QueryPath = ({ points, visible = true }: QueryPathProps) => {
     const endColor = new THREE.Color("#708090");   // Slate gray
 
     sortedPoints.forEach((point, index) => {
+      // Sample terrain height if sampler provided, otherwise use point height
+      const terrainHeight = sampleHeight 
+        ? sampleHeight(point.position[0], point.position[2])
+        : point.position[1];
+      const baseY = Math.max(terrainHeight, point.height);
+      
       // Lift path slightly above the product markers
       const lift = 1.8;
       pts.push(new THREE.Vector3(
         point.position[0],
-        point.position[1] + lift,
+        baseY + lift,
         point.position[2]
       ));
 
@@ -53,7 +63,7 @@ const QueryPath = ({ points, visible = true }: QueryPathProps) => {
     });
 
     return { pathPoints: pts, pathColors: cols };
-  }, [sortedPoints]);
+  }, [sortedPoints, sampleHeight]);
 
   if (!visible || pathPoints.length < 2) {
     return null;
