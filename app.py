@@ -291,9 +291,15 @@ st.markdown("""
         height: auto;
     }
     
-    /* Swipe card image styling */
+    /* Make swipe cards adjust to content and center */
     iframe[title*="streamlit_swipecards"] {
-        min-height: 500px !important;
+        height: auto !important;
+        min-height: 600px !important;
+        width: 75% !important;
+        max-width: 75% !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        display: block !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -424,8 +430,10 @@ def init_session_state():
         # Swipe specific
         "discovery_queue": [],
         "cart": [],
+        "liked_products": [],  # Products swiped right, pending review
+        "skipped_products": [],  # Products swiped left
         "interaction_count": 0,
-        "view_mode": "Swipe",  # 'Swipe' or 'Cart'
+        "view_mode": "Swipe",  # 'Swipe', 'Cart', or 'Review'
         "current_index": 0,
         "last_queue_query": None,
     }
@@ -888,154 +896,95 @@ def perform_search(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         return []
 
 
-def render_swipe_ui():
-    """Render the Tinder-like swipe interface."""
-    st.title("🔥 Discover Products")
-    st.caption("Swipe **Right** ➡️ to Add to Cart | Swipe **Left** ⬅️ to Skip")
-
-    # Remaining counter (from the current 30-item queue)
-    if st.session_state.discovery_queue:
-        remaining = len(st.session_state.discovery_queue)
-        st.info(f"📚 Remaining in this batch: {remaining} / {len(st.session_state.discovery_queue)}")
-    
-    st.markdown("---")
-    
-    # Reload queue if empty
+@st.fragment
+def render_swipe_cards():
+    """Fragment for swipe cards - tracks swipes without page reload."""
     if not st.session_state.discovery_queue:
-        with st.spinner("Curating your feed..."):
-            load_discovery_queue()
+        return
     
-    if not st.session_state.discovery_queue:
-        st.warning("No products found for your criteria. Try adjusting filters!")
-        if st.button("Reset Filters"):
-            st.session_state.preferred_brands = []
-            st.session_state.preferred_categories = []
-            st.session_state.search_query = ""
-            st.rerun()
-        return
-
-    # Handle exhausted queue
-    if st.session_state.current_index >= len(st.session_state.discovery_queue):
-        st.info("No more products — refine your search")
-        return
-
-    # Build remaining cards as a stack
-    remaining_products = st.session_state.discovery_queue[st.session_state.current_index:]
+    # Initialize liked products tracking if not exists
+    if "liked_products" not in st.session_state:
+        st.session_state.liked_products = []
+    
+    remaining_products = st.session_state.discovery_queue
     if not remaining_products:
-        st.info("No more products — refine your search")
         return
 
     # Get Top Card (front of stack)
     product = remaining_products[0]
     payload = product.get("payload", {})
     
-    # Prepare details for card
-    name = payload.get("name", "Unknown")
-    price = payload.get("price", 0)
-    final_score = product.get("final_score", 0.0)
-    brand = payload.get("brand", "Unknown")
-    
-    # Determine match quality text
-    match_text = "N/A"
-    match_emoji = "🤔"
-    if final_score > 0.8:
-        match_text = "Perfect Match"
-        match_emoji = "🌟"
-    elif final_score > 0.6:
-        match_text = "Good Match"
-        match_emoji = "👍"
-    elif final_score > 0.4:
-        match_text = "Potential"
-        match_emoji = "💭"
-    
-    categories = payload.get("categories", [])
-    if not isinstance(categories, list):
-        categories = [categories] if categories else []
-    category = categories[0] if categories else "General"
-
-    description_text = (
-        f"**{name}**\n\n"
-        f"Price: **${price:,.2f}**\n"
-        f"Brand: **{brand}**\n"
-        f"Category: **{category}**\n"
-        f"Match: {match_emoji} {match_text} ({final_score:.0%})\n\n"
-        f"{payload.get('description', '')[:150]}..."
-    )
-    
-    # Prepare stack cards
+    # Prepare stack cards - simplified with just name and price
     cards = []
     for idx, p in enumerate(remaining_products):
         p_payload = p.get("payload", {})
         p_name = p_payload.get("name", "Unknown")
         p_price = p_payload.get("price", 0)
-        p_final_score = p.get("final_score", 0.0)
-        p_brand = p_payload.get("brand", "Unknown")
-        p_categories = p_payload.get("categories", [])
-        if not isinstance(p_categories, list):
-            p_categories = [p_categories] if p_categories else []
-        p_category = p_categories[0] if p_categories else "General"
-        p_match_text = "N/A"
-        p_match_emoji = "🤔"
-        if p_final_score > 0.8:
-            p_match_text = "Perfect Match"
-            p_match_emoji = "🌟"
-        elif p_final_score > 0.6:
-            p_match_text = "Good Match"
-            p_match_emoji = "👍"
-        elif p_final_score > 0.4:
-            p_match_text = "Potential"
-            p_match_emoji = "💭"
-
-        p_description_text = (
-            f"**{p_name}**\n\n"
-            f"Price: **${p_price:,.2f}**\n"
-            f"Brand: **{p_brand}**\n"
-            f"Category: **{p_category}**\n"
-            f"Match: {p_match_emoji} {p_match_text} ({p_final_score:.0%})\n\n"
-            f"{p_payload.get('description', '')[:150]}..."
-        )
 
         cards.append({
-            "id": p.get("id") or p_payload.get("product_id") or f"idx_{st.session_state.current_index + idx}",
-            "name": p_brand,
-            "description": p_description_text,
+            "id": p.get("id") or p_payload.get("product_id") or f"idx_{idx}",
+            "name": p_name,
+            "description": f"**${p_price:,.2f}**",
             "image": p_payload.get("image_url", "https://via.placeholder.com/400x400?text=No+Image"),
         })
     
-    # Unique key for React component to reset on new card
-    current_key = f"swipe_{product.get('id', 'u')}_{st.session_state.interaction_count}"
+    # Single key for the entire session - component tracks swipes internally
+    current_key = f"swipe_session_{st.session_state.last_queue_query}"
     
-    # Render Swipe Component (stacked cards)
+    # Render Swipe Component - it handles all swipes internally
     result = streamlit_swipecards(
         cards=cards,
-        key=current_key
+        key=current_key,
+        view="desktop"
     )
     
-    if result:
-        # Resolve swiped product from result or fallback to top card
-        swiped_product = product
-        if isinstance(result, dict):
-            swiped_id = result.get("id") or result.get("card", {}).get("id")
-            if swiped_id:
-                for p in remaining_products:
-                    p_id = p.get("id") or p.get("payload", {}).get("product_id")
-                    if str(p_id) == str(swiped_id):
-                        swiped_product = p
-                        break
-
-        process_swipe_result(result, swiped_product)
-
-        # Remove swiped product from queue to keep stack accurate
-        swiped_id = swiped_product.get("id") or swiped_product.get("payload", {}).get("product_id")
-        st.session_state.discovery_queue = [
-            p for p in st.session_state.discovery_queue
-            if (p.get("id") or p.get("payload", {}).get("product_id")) != swiped_id
+    # Process result - component returns all swiped cards info
+    if result and isinstance(result, dict):
+        swiped_cards = result.get("swipedCards", [])
+        remaining_count = result.get("remainingCards", len(cards))
+        
+        # Debug info
+        if "debug_swipe" not in st.session_state:
+            st.session_state.debug_swipe = []
+        st.session_state.debug_swipe.append(f"Swiped: {len(swiped_cards)}, Remaining: {remaining_count}")
+        st.session_state.debug_swipe = st.session_state.debug_swipe[-5:]
+        
+        # Collect all right-swiped products
+        liked_indices = [s["index"] for s in swiped_cards if s.get("action") == "right"]
+        
+        # Update liked products list
+        st.session_state.liked_products = [
+            remaining_products[i] for i in liked_indices 
+            if i < len(remaining_products)
         ]
-        st.rerun()
+        
+        # Show progress
+        if swiped_cards:
+            liked_count = len([s for s in swiped_cards if s.get("action") == "right"])
+            st.success(f"❤️ Liked: {liked_count} | ⏭️ Skipped: {len(swiped_cards) - liked_count}")
+        
+        # When all cards are swiped, show the review button
+        if remaining_count == 0:
+            if st.session_state.liked_products:
+                st.balloons()
+                st.success(f"🎉 Done! You liked {len(st.session_state.liked_products)} products!")
+                if st.button("📦 Add All to Cart", type="primary", use_container_width=True, key="add_all_to_cart"):
+                    # Add all liked products to cart
+                    if "cart" not in st.session_state:
+                        st.session_state.cart = []
+                    st.session_state.cart.extend(st.session_state.liked_products)
+                    cart_count = len(st.session_state.cart)
+                    st.session_state.liked_products = []
+                    st.session_state.discovery_queue = []
+                    st.session_state.view_mode = "Cart"
+                    st.toast(f"✅ Added {cart_count} items to cart!", icon="🛒")
+                    # Full page rerun to switch to cart view
+                    st.rerun()
+            else:
+                st.info("You didn't like any products. Try a new search!")
 
     # Combined details and explanation section
     with st.expander("🔍 View Details & Why We Recommended This", expanded=False):
-        # Log click interaction when expanded
         on_product_click(product, st.session_state.search_query)
         
         st.markdown("### Product Details")
@@ -1059,6 +1008,36 @@ def render_swipe_ui():
             product.get("popularity_score", 0.0),
             payload,
         )
+
+
+def render_swipe_ui():
+    """Render the Tinder-like swipe interface."""
+    st.title("🔥 Discover Products")
+    st.caption("Swipe **Right** ➡️ to Add to Cart | Swipe **Left** ⬅️ to Skip")
+
+    # Remaining counter
+    if st.session_state.discovery_queue:
+        remaining = len(st.session_state.discovery_queue)
+        st.info(f"📚 Remaining in this batch: {remaining}")
+    
+    st.markdown("---")
+    
+    # Reload queue if empty
+    if not st.session_state.discovery_queue:
+        with st.spinner("Curating your feed..."):
+            load_discovery_queue()
+    
+    if not st.session_state.discovery_queue:
+        st.warning("No products found for your criteria. Try adjusting filters!")
+        if st.button("Reset Filters"):
+            st.session_state.preferred_brands = []
+            st.session_state.preferred_categories = []
+            st.session_state.search_query = ""
+            st.rerun()
+        return
+    
+    # Render the swipe cards fragment (reruns independently)
+    render_swipe_cards()
 
 
 def render_cart_ui():
