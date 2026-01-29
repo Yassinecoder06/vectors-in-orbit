@@ -16,9 +16,11 @@ This visualization proves it.
 """
 
 import json
+import random
+import time
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Dict, Tuple, List
+from typing import Any, Dict, Tuple, List, Optional, Sequence
 import warnings
 import os
 from dotenv import load_dotenv
@@ -33,6 +35,11 @@ try:
     from qdrant_client import QdrantClient
 except ImportError:
     QdrantClient = None
+
+try:
+    from search_pipeline import PRODUCTS_COLLECTION
+except ImportError:
+    PRODUCTS_COLLECTION = "products_multimodal"
 
 load_dotenv()
 
@@ -672,6 +679,330 @@ def demo_with_real_data(user_id: str = None, top_k: int = 50):
         print("  1. QDRANT_URL and QDRANT_API_KEY are set in .env")
         print("  2. Data has been inserted with generate_and_insert_data.py")
         print("  3. Qdrant Cloud cluster is running")
+
+
+def _normalize_coords(coords: np.ndarray, spread: float = 18.0) -> np.ndarray:
+    """Center and scale coordinates so they fit inside a predictable range."""
+    centered = coords - np.mean(coords, axis=0, keepdims=True)
+    max_abs = np.max(np.abs(centered)) or 1.0
+    return (centered / max_abs) * spread
+
+
+def _color_for_affordability(value: float) -> str:
+    """Map affordability score to brand colors used in the 2D chart."""
+    if value >= 0.4:
+        return "#2ecc71"
+    if value >= 0.2:
+        return "#f39c12"
+    return "#e74c3c"
+
+
+def build_experimental_terrain_payload(
+    client: "QdrantClient",
+    sample_size: int = 200,
+    random_seed: int = 42,
+    budget_override: Optional[float] = None,
+    user_risk_tolerance: float = 0.5,
+) -> Optional[Dict[str, Any]]:
+    """Construct a JSON-friendly payload for the React terrain component.
+
+    Pulls a lightweight sample of product embeddings directly from Qdrant,
+    projects them via UMAP, layers on procedural heights, and returns the
+    metadata required by the React Three Fiber canvas.
+    """
+    if client is None:
+        return None
+
+    try:
+        batch_limit = min(sample_size * 3, 1000)
+        points, _ = client.scroll(
+            collection_name=PRODUCTS_COLLECTION,
+            limit=batch_limit,
+            with_payload=True,
+            with_vectors=True,
+        )
+    except Exception as exc:
+        print(f"Failed to scroll Qdrant for terrain payload: {exc}")
+        return None
+
+    filtered_points = [p for p in points if p.vector is not None]
+    if len(filtered_points) < 4:
+        return None
+
+    rng = np.random.default_rng(random_seed)
+    take = min(sample_size, len(filtered_points))
+    selected_idx = rng.choice(len(filtered_points), size=take, replace=False)
+    selected_points = [filtered_points[idx] for idx in selected_idx]
+
+    embeddings = np.array([p.vector for p in selected_points], dtype=np.float32)
+    if embeddings.ndim != 2 or embeddings.shape[0] < 4:
+        return None
+
+    coords = project_embeddings_umap(embeddings, seed=random_seed)
+    normalized = _normalize_coords(coords)
+    bounds = {
+        "minX": float(np.min(normalized[:, 0])),
+        "maxX": float(np.max(normalized[:, 0])),
+        "minZ": float(np.min(normalized[:, 1])),
+        "maxZ": float(np.max(normalized[:, 1])),
+    }
+    span = max(bounds["maxX"] - bounds["minX"], bounds["maxZ"] - bounds["minZ"])
+    pad = max(span * 0.15, 2.0)
+    bounds["minX"] -= pad
+    bounds["maxX"] += pad
+    bounds["minZ"] -= pad
+    bounds["maxZ"] += pad
+
+    point_records = []
+    for idx, point in enumerate(selected_points):
+        payload = point.payload or {}
+        price = float(payload.get("price", 0.0) or 0.0)
+        available_balance = float(payload.get("available_balance", 0.0) or 0.0)
+        credit_limit = float(payload.get("credit_limit", 0.0) or 0.0)
+        budget_guess = available_balance + credit_limit
+        if budget_guess <= 0:
+            budget_guess = budget_override or max(price * 1.6, 1.0)
+
+        affordability = max(0.0, min(1.0, 1.0 - (price / (budget_guess + 1e-6))))
+        category = payload.get("categories")
+        if isinstance(category, list):
+            category = category[0] if category else "Unknown"
+
+        image_url = (
+            payload.get("image_url")
+            or payload.get("image")
+            or payload.get("thumbnail")
+            or payload.get("thumbnail_url")
+        )
+
+        score = float(payload.get("final_score") or payload.get("score") or rng.uniform(0.25, 0.95))
+
+        point_records.append(
+            {
+                "idx": idx,
+                "id": str(point.id),
+                "price": price,
+                "affordability": affordability,
+                "brand": payload.get("brand") or "Unknown",
+                "category": category or "Unknown",
+                "name": payload.get("name") or payload.get("title") or f"Product {idx + 1}",
+                "score": score,
+                "image_url": image_url,
+            }
+        )
+
+    if not point_records:
+        return None
+
+    price_array = np.array([rec["price"] for rec in point_records], dtype=np.float32)
+    price_min = float(price_array.min()) if price_array.size else 0.0
+    price_max = float(price_array.max()) if price_array.size else 0.0
+    price_span = max(price_max - price_min, 1e-6)
+    height_scale = 35.0
+
+    surface_points: List[Dict[str, Any]] = []
+    highlight_scores = []
+    for rec in point_records:
+        idx = rec["idx"]
+        price_norm = (rec["price"] - price_min) / price_span
+        shaped = (0.2 + price_norm) ** 1.35
+        height = float(shaped * height_scale)
+        surface_points.append(
+            {
+                "id": rec["id"],
+                "position": [
+                    float(normalized[idx, 0]),
+                    height,
+                    float(normalized[idx, 1]),
+                ],
+                "height": height,
+                "color": _color_for_affordability(rec["affordability"]),
+                "price": rec["price"],
+                "price_normalized": price_norm,
+                "brand": rec["brand"],
+                "category": rec["category"],
+                "name": rec["name"],
+                "score": rec["score"],
+                "risk_tolerance": user_risk_tolerance,
+                "imageUrl": rec.get("image_url"),
+            }
+        )
+        highlight_scores.append((rec["score"], idx))
+
+    highlight_scores.sort(reverse=True)
+    highlight_points = []
+    for rank, (_, idx) in enumerate(highlight_scores[:7], start=1):
+        point = surface_points[idx]
+        highlight_points.append(
+            {
+                "id": point["id"],
+                "label": f"#{rank} {point['name']}",
+                "position": point["position"],
+                "price": point["price"],
+                "brand": point["brand"],
+                "category": point["category"],
+                "score": point["score"],
+            }
+        )
+
+    payload = {
+        "points": surface_points,
+        "highlights": highlight_points,
+        "meta": {
+            "sample_size": len(surface_points),
+            "seed": random_seed,
+            "generated_at": time.time(),
+            "mode": "qdrant",
+            "price_range": {
+                "min": price_min,
+                "max": price_max,
+            },
+            "height_scale": height_scale,
+            "bounds": bounds,
+        },
+    }
+
+    return payload
+
+
+def build_search_result_terrain_payload(
+    *,
+    results: Sequence[Dict[str, Any]],
+    coords: np.ndarray,
+    user_risk_tolerance: float,
+    budget_override: Optional[float] = None,
+    random_seed: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Create a terrain payload directly from the active search results."""
+
+    if not results or coords is None:
+        return None
+
+    if coords.ndim != 2 or coords.shape[0] != len(results):
+        return None
+
+    normalized = _normalize_coords(coords)
+    rng = np.random.default_rng(random_seed or 0)
+
+    proto_points: List[Dict[str, Any]] = []
+    for idx, (result, position) in enumerate(zip(results, normalized)):
+        payload = result.get("payload", {}) or {}
+        price = float(payload.get("price") or 0.0)
+        available_balance = float(payload.get("available_balance") or 0.0)
+        credit_limit = float(payload.get("credit_limit") or 0.0)
+        budget_guess = budget_override if budget_override and budget_override > 0 else available_balance + credit_limit
+        if budget_guess <= 0:
+            budget_guess = max(price * 1.6, 1.0)
+
+        affordability = max(0.0, min(1.0, 1.0 - (price / (budget_guess + 1e-6))))
+        image_url = (
+            payload.get("image_url")
+            or payload.get("image")
+            or payload.get("thumbnail")
+            or payload.get("thumbnail_url")
+        )
+
+        proto_points.append(
+            {
+                "id": str(result.get("id", f"result-{idx}")),
+                "position": position,
+                "price": price,
+                "color": _color_for_affordability(affordability),
+                "brand": payload.get("brand") or "Unknown",
+                "category": (payload.get("categories") or ["Unknown"])[0]
+                if isinstance(payload.get("categories"), list)
+                else payload.get("category")
+                or payload.get("categories")
+                or "Unknown",
+                "name": payload.get("name")
+                or payload.get("title")
+                or payload.get("product_name")
+                or f"Product {idx + 1}",
+                "score": float(result.get("final_score") or payload.get("score") or rng.uniform(0.35, 0.92)),
+                "affordability": affordability,
+                "image_url": image_url,
+            }
+        )
+
+    if not proto_points:
+        return None
+
+    price_array = np.array([rec["price"] for rec in proto_points], dtype=np.float32)
+    price_min = float(price_array.min()) if price_array.size else 0.0
+    price_max = float(price_array.max()) if price_array.size else 0.0
+    price_span = max(price_max - price_min, 1e-6)
+    height_scale = 35.0
+
+    surface_points: List[Dict[str, Any]] = []
+    highlight_scores: List[Tuple[float, int]] = []
+    for idx, rec in enumerate(proto_points):
+        price_norm = (rec["price"] - price_min) / price_span
+        shaped = (0.2 + price_norm) ** 1.35
+        height = float(shaped * height_scale)
+        surface_points.append(
+            {
+                "id": rec["id"],
+                "position": [float(rec["position"][0]), height, float(rec["position"][1])],
+                "height": height,
+                "color": rec["color"],
+                "price": rec["price"],
+                "price_normalized": price_norm,
+                "brand": rec["brand"],
+                "category": rec["category"],
+                "name": rec["name"],
+                "score": rec["score"],
+                "risk_tolerance": user_risk_tolerance,
+                "imageUrl": rec.get("image_url"),
+            }
+        )
+        highlight_scores.append((rec["score"], idx))
+
+    highlight_scores.sort(reverse=True)
+    highlights = []
+    for rank, (_, idx) in enumerate(highlight_scores[:7], start=1):
+        point = surface_points[idx]
+        highlights.append(
+            {
+                "id": point["id"],
+                "label": f"#{rank} {point['name']}",
+                "position": point["position"],
+                "price": point["price"],
+                "brand": point["brand"],
+                "category": point["category"],
+                "score": point["score"],
+            }
+        )
+
+    xs = normalized[:, 0]
+    zs = normalized[:, 1]
+    bounds = {
+        "minX": float(xs.min()),
+        "maxX": float(xs.max()),
+        "minZ": float(zs.min()),
+        "maxZ": float(zs.max()),
+    }
+    span = max(bounds["maxX"] - bounds["minX"], bounds["maxZ"] - bounds["minZ"])
+    pad = max(span * 0.18, 1.5)
+    bounds["minX"] -= pad
+    bounds["maxX"] += pad
+    bounds["minZ"] -= pad
+    bounds["maxZ"] += pad
+
+    payload = {
+        "points": surface_points,
+        "highlights": highlights,
+        "meta": {
+            "sample_size": len(surface_points),
+            "seed": random_seed or 0,
+            "generated_at": time.time(),
+            "mode": "search_results",
+            "bounds": bounds,
+            "price_range": {"min": price_min, "max": price_max},
+            "height_scale": height_scale,
+        },
+    }
+
+    return payload
 
 
 if __name__ == "__main__":

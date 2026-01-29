@@ -13,6 +13,7 @@ Architecture:
 import streamlit as st
 import json
 import time
+import random
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import numpy as np
@@ -27,8 +28,10 @@ from financial_semantic_viz import (
     project_embeddings_umap,
     visualize_financial_landscape,
     determine_safety_colors,
-    export_products_for_visualization
+    export_products_for_visualization,
+    build_search_result_terrain_payload,
 )
+from terrain_component import terrain_canvas
 
 # =============================================================================
 # Interaction Hooks
@@ -245,6 +248,7 @@ def init_session_state():
         "search_query": "",
         "search_results": [],
         "has_searched": False,
+        "terrain_seed": 42,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -963,6 +967,47 @@ def render_main_area():
                                 st.info(f"**Your Budget:** ${total_budget:,.2f}")
                             with col2:
                                 st.info(f"**Avg Product Price:** ${np.mean(finance_metadata['prices']):,.2f}")
+
+                            st.markdown("---")
+                            st.markdown("#### ⚡ Experimental 3D Terrain Explorer")
+                            st.caption(
+                                "Prototype React Three Fiber canvas built from sampled embeddings. "
+                                "Displays procedural terrain plus highlighted products."
+                            )
+
+                            toggle_col, shuffle_col = st.columns([4, 1])
+                            with toggle_col:
+                                show_terrain = st.toggle(
+                                    "Enable 3D terrain (beta)",
+                                    value=False,
+                                    key="terrain_toggle",
+                                )
+                            with shuffle_col:
+                                if show_terrain and st.button("Shuffle seed", use_container_width=True):
+                                    st.session_state.terrain_seed = random.randint(1, 1_000_000)
+                                    st.rerun()
+
+                            if show_terrain:
+                                with st.spinner("Rendering 3D terrain..."):
+                                    terrain_payload = build_search_result_terrain_payload(
+                                        results=results,
+                                        coords=coords,
+                                        user_risk_tolerance=user_risk_tolerance,
+                                        budget_override=total_budget,
+                                        random_seed=int(st.session_state.terrain_seed),
+                                    )
+
+                                if terrain_payload:
+                                    terrain_canvas(
+                                        data=terrain_payload,
+                                        height=650,
+                                        key=f"terrain_canvas_{terrain_payload.get('meta', {}).get('seed', st.session_state.terrain_seed)}",
+                                    )
+                                    st.caption(
+                                        "Click and drag to orbit the scene. Scroll to zoom. Feature is bundled with the app; no external hosting required."
+                                    )
+                                else:
+                                    st.warning("Unable to create the terrain payload. Try again in a moment.")
                         else:
                             st.warning("No product embeddings available for visualization.")
                         
