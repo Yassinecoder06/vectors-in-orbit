@@ -88,9 +88,10 @@ def on_add_to_cart(product: Dict[str, Any], query: str = ""):
             user_context=user_context,
             query=query
         )
-        st.toast("✅ Added to cart!", icon="🛒")
-    except Exception as e:
-        st.warning(f"Failed to log add to cart: {e}")
+    except Exception:
+        pass  # Silent fail - don't disrupt UX with logging errors
+    
+    st.toast("✅ Added to cart!", icon="🛒")
 
 
 def on_purchase(product: Dict[str, Any], query: str = ""):
@@ -104,9 +105,10 @@ def on_purchase(product: Dict[str, Any], query: str = ""):
             user_context=user_context,
             query=query
         )
-        st.toast("✅ Purchase logged! Thank you!", icon="💳")
-    except Exception as e:
-        st.warning(f"Failed to log purchase: {e}")
+    except Exception:
+        pass  # Silent fail - don't disrupt UX with logging errors
+    
+    st.toast("✅ Purchase logged! Thank you!", icon="💳")
 
 
 def _build_product_payload_full(product: Dict[str, Any]) -> Dict[str, Any]:
@@ -153,53 +155,98 @@ def load_discovery_queue():
     st.session_state.last_queue_query = query
 
 
-def process_swipe_result(result: str, product: Dict[str, Any]):
-    """Process the swipe result (right = like, left = pass)."""
+def process_swipe_result(result, product: Dict[str, Any]):
+    """Process the swipe result (right = like, left = pass).
+    
+    The streamlit_swipecards component returns a dict with:
+    - lastAction: {action: 'left'|'right'|'back', cardIndex: int}
+    - swipedCards: [{index: int, action: str}, ...]
+    - totalSwiped: int
+    - remainingCards: int
+    """
     user_context = build_user_context()
+    
+    # Debug: show in sidebar what we received
+    if "debug_swipe" not in st.session_state:
+        st.session_state.debug_swipe = []
+    st.session_state.debug_swipe.append(f"Result: {result}")
+    st.session_state.debug_swipe = st.session_state.debug_swipe[-5:]
 
-    # Debug: log the raw result to understand what the component emits
-    st.write(f"DEBUG: swipe result={result}, type={type(result)}")
-
-    action = result
+    action = None
+    
+    # The component returns action nested in lastAction
     if isinstance(result, dict):
-        action = (
-            result.get("action")
-            or result.get("direction")
-            or result.get("swipe")
-            or result.get("decision")
-        )
-        if action is None and isinstance(result.get("like"), bool):
-            action = "right" if result.get("like") else "left"
+        # Primary: get action from lastAction.action
+        last_action = result.get("lastAction")
+        if isinstance(last_action, dict):
+            action = last_action.get("action")
+        
+        # Fallback to top-level action key
+        if action is None:
+            action = result.get("action")
+        
+        # Fallback to other possible keys
+        if action is None:
+            action = (
+                result.get("direction")
+                or result.get("swipe")
+                or result.get("decision")
+            )
+    elif isinstance(result, str):
+        action = result
+    elif isinstance(result, bool):
+        action = "right" if result else "left"
 
-    # Normalize possible action values
+    # Normalize action values
     if isinstance(action, str):
-        action = action.lower()
-        if action in {"like", "swiperight", "right", "r"}:
+        action = action.lower().strip()
+        if action in {"like", "swiperight", "right", "r", "yes", "true"}:
             action = "right"
-        elif action in {"dislike", "swipeleft", "left", "l"}:
+        elif action in {"dislike", "swipeleft", "left", "l", "no", "false", "pass", "skip"}:
             action = "left"
+        elif action == "back":
+            action = "back"
+    
+    st.session_state.debug_swipe.append(f"Action: {action}")
     
     if action == "right":
+        if "cart" not in st.session_state:
+            st.session_state.cart = []
+
         # Add to cart
         st.session_state.cart.append(product)
-        log_interaction(
-            user_id=user_context["user_id"],
-            product_payload=_build_product_payload_full(product),
-            interaction_type="add_to_cart",
-            user_context=user_context,
-            query=st.session_state.search_query
-        )
+        st.session_state.debug_swipe.append(f"✅ Added! Cart: {len(st.session_state.cart)}")
+        
+        try:
+            log_interaction(
+                user_id=user_context["user_id"],
+                product_payload=_build_product_payload_full(product),
+                interaction_type="add_to_cart",
+                user_context=user_context,
+                query=st.session_state.search_query
+            )
+        except Exception:
+            pass
         st.toast("✅ Added to cart!", icon="🛒")
         
     elif action == "left":
-        # Log as view/pass
-        log_interaction(
-            user_id=user_context["user_id"],
-            product_payload=_build_product_payload_full(product),
-            interaction_type="view",
-            user_context=user_context,
-            query=st.session_state.search_query
-        )
+        st.session_state.debug_swipe.append("⏭️ Skipped")
+        try:
+            log_interaction(
+                user_id=user_context["user_id"],
+                product_payload=_build_product_payload_full(product),
+                interaction_type="view",
+                user_context=user_context,
+                query=st.session_state.search_query
+            )
+        except Exception:
+            pass
+            
+    elif action == "back":
+        st.session_state.debug_swipe.append("⬅️ Back pressed")
+        
+    else:
+        st.session_state.debug_swipe.append(f"⚠️ Unknown: {action}")
     
     st.session_state.interaction_count += 1
 
@@ -222,15 +269,41 @@ st.markdown("""
         align-items: center;
         margin-top: 2rem;
     }
+    
+    /* Style for all Streamlit images to fit properly */
+    [data-testid="stImage"] {
+        display: flex;
+        justify-content: center;
+    }
+    
+    [data-testid="stImage"] img {
+        object-fit: contain;
+        border-radius: 8px;
+        max-height: 300px;
+        width: 100%;
+    }
+    
+    /* Specific styling for cart thumbnails */
+    .element-container [data-testid="stImage"] img {
+        object-fit: cover;
+        border-radius: 8px;
+        max-width: 100%;
+        height: auto;
+    }
+    
+    /* Swipe card image styling */
+    iframe[title*="streamlit_swipecards"] {
+        min-height: 500px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # User personas for quick selection
 USER_PERSONAS = {
-    "Student": {"balance": 500, "credit": 1000, "risk": "Low"},
-    "Professional": {"balance": 5000, "credit": 15000, "risk": "Medium"},
-    "Executive": {"balance": 20000, "credit": 50000, "risk": "High"},
-    "Custom": {"balance": 2500, "credit": 5000, "risk": "Medium"},
+    "Student": {"balance": 500, "credit": 1000},
+    "Professional": {"balance": 5000, "credit": 15000},
+    "Executive": {"balance": 20000, "credit": 50000},
+    "Custom": {"balance": 2500, "credit": 5000},
 }
 
 
@@ -486,6 +559,12 @@ def render_sidebar():
     
     # Render trending section below main sidebar
     render_trending_section()
+    
+    # Debug panel for swipe results
+    if st.session_state.get("debug_swipe"):
+        with st.sidebar.expander("🐛 Swipe Debug", expanded=False):
+            for msg in st.session_state.debug_swipe:
+                st.caption(msg)
 
 
 
@@ -603,7 +682,7 @@ def render_product_card(product: Dict[str, Any], rank: int):
         
         with col1:
             if image_url:
-                st.image(image_url, width=220)
+                st.image(image_url, width="content")
             st.markdown(f"### #{rank} {name}")
             st.caption(f"**{brand}** · {category}")
         
@@ -954,18 +1033,14 @@ def render_swipe_ui():
         ]
         st.rerun()
 
-    # Click-to-view details (logs click interaction)
-    details_key = f"details_{product.get('id', 'u')}_{st.session_state.current_index}"
-    if details_key not in st.session_state:
-        st.session_state[details_key] = False
-
-    if st.button("🔎 View details & why recommended", key=f"details_btn_{details_key}"):
-        st.session_state[details_key] = True
+    # Combined details and explanation section
+    with st.expander("🔍 View Details & Why We Recommended This", expanded=False):
+        # Log click interaction when expanded
         on_product_click(product, st.session_state.search_query)
-
-    if st.session_state[details_key]:
+        
         st.markdown("### Product Details")
         st.write(payload.get("description", "No description available"))
+        
         st.markdown("### Why We Recommended This")
         explanations = product.get("explanations", [])
         if explanations:
@@ -973,10 +1048,9 @@ def render_swipe_ui():
                 st.write(f"{i}. {exp}")
         else:
             st.caption("No explanation available.")
+        
         st.markdown("---")
         
-    # Show detailed explanation below
-    with st.expander("🔍 See Why We Picked This For You", expanded=False):
         render_explanation(
             product.get("semantic_score", 0.0),
             product.get("affordability_score", 0.0),
@@ -1011,7 +1085,7 @@ def render_cart_ui():
             with c1:
                 img_url = payload.get("image_url", "")
                 if img_url:
-                    st.image(img_url, width=80)
+                    st.image(img_url, width=100)
             with c2:
                 st.subheader(payload.get("name", "Unknown"))
                 st.caption(f"{payload.get('brand', 'N/A')} - ${price:,.2f}")
