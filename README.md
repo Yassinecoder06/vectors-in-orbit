@@ -2,6 +2,8 @@
 
 A production-ready e-commerce recommendation system that combines semantic search, financial constraints, collaborative filtering, and real-time popularity tracking using Qdrant vector database. Features an interactive 3D terrain visualization for exploring product landscapes.
 
+**🚀 Live Demo**: https://fin-e-trip.streamlit.app/
+
 ## Key Features
 
 - **Semantic Search**: Find products based on natural language understanding
