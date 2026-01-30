@@ -19,6 +19,15 @@ A production-ready e-commerce recommendation system that combines semantic searc
 
 ## Architecture
 
+### System Pipeline
+![Recommendation Pipeline](image/pipeline.png)
+
+The system combines data from multiple sources:
+- **Amazon/Alibaba**: Web-scraped product data with pre-processing
+- **Qdrant**: Stores 4 collections (products, users, finance, interactions)
+- **Scoring Engine**: 5-signal ranking (semantic, affordability, preference, collaborative, popularity)
+- **Final Ranking**: Products ranked by composite score
+
 ### 4 Qdrant Collections
 - **products_multimodal**: Product catalog with semantic embeddings (384D)
 - **user_profiles**: User preferences and demographics (384D)
