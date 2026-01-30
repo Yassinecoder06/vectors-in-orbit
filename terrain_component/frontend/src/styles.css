@@ -130,6 +130,46 @@ body,
   box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3);
 }
 
+/* Group Labels for Category Clusters */
+.group-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.75rem;
+  border: 2px solid;
+  backdrop-filter: blur(8px);
+  text-align: center;
+  animation: groupLabelPulse 3s ease-in-out infinite;
+}
+
+.group-label-text {
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: #f8fafc;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+}
+
+.group-label-count {
+  font-size: 1.4rem;
+  font-weight: 500;
+  color: #94a3b8;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes groupLabelPulse {
+  0%, 100% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.02);
+  }
+}
+
 /* Control Indicators */
 .control-indicators {
   position: absolute;

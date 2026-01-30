@@ -122,16 +122,16 @@ export function generateMountainsFromProducts(
   
   // Find the best product's height (score-based) for the central peak
   const bestProductHeight = points.length > 0 
-    ? Math.max(...points.map(p => p.height))
-    : 18;
+    ? Math.max(...points.map(p => p.height)) * 0.6  // Reduce height by 40%
+    : 12;
   
-  // Main central mountain - height based on best product score
+  // Main central mountain - very wide and gentle slopes
   mountains.push({
     x: centerX,
     z: centerZ,
-    height: bestProductHeight, // Dynamic: based on best product's score
-    radius: 35,
-    slopeFactor: 0.5,
+    height: bestProductHeight, // Reduced height
+    radius: 70,  // Much wider base
+    slopeFactor: 0.9,  // Very gentle, rounded slopes
   });
   
   if (points.length === 0) {
@@ -148,23 +148,23 @@ export function generateMountainsFromProducts(
   
   topProducts.forEach((point, idx) => {
     if (idx === 0) {
-      // Best product - add extra peak at center summit matching product height (score-based)
+      // Best product - gentle dome at center
       mountains.push({
         x: centerX,
         z: centerZ,
-        height: point.height + 2, // Product height (from score) plus small buffer
-        radius: 6,
-        slopeFactor: 0.8, // Sharp peak
+        height: point.height * 0.5 + 1, // Much shorter peak
+        radius: 15,  // Wide peak base
+        slopeFactor: 0.85, // Very gentle peak
       });
     } else {
-      // Other top products - secondary peaks with height based on their score
+      // Other top products - gentle mounds
       const scoreFactor = point.score; // 0.0 to 1.0
       mountains.push({
         x: point.position[0],
         z: point.position[2],
-        height: point.height + 1, // Product height (from score) plus buffer
-        radius: 6 + scoreFactor * 6, // Higher score = larger mountain radius
-        slopeFactor: 0.5 + scoreFactor * 0.3,
+        height: point.height * 0.5 + 0.5, // Much shorter
+        radius: 15 + scoreFactor * 10, // Wide bases
+        slopeFactor: 0.75 + scoreFactor * 0.15, // Gentle slopes
       });
     }
   });

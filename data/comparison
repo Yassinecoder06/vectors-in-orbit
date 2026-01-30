@@ -1,0 +1,108 @@
+# tfidf_baseline_evaluation.py
+
+import json
+import numpy as np
+import math
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# -------------------------------
+# Load Products
+# -------------------------------
+with open("products_normalized.json", "r", encoding="utf-8") as f:
+    products = json.load(f)
+
+# Build corpus: concatenate name + description + category
+texts = [
+    f"{p.get('name', '')} {p.get('description', '')} {p.get('category', '')}"
+    for p in products
+]
+
+# -------------------------------
+# TF-IDF Vectorization
+# -------------------------------
+vectorizer = TfidfVectorizer(
+    ngram_range=(1, 2),
+    max_features=50000,
+    stop_words="english"
+)
+
+tfidf_matrix = vectorizer.fit_transform(texts)
+
+# -------------------------------
+# Recommendation Function
+# -------------------------------
+def recommend(item_id, top_k=10):
+    """Recommend top_k items for a given item_id using TF-IDF cosine similarity."""
+    query_vec = tfidf_matrix[item_id]
+    scores = cosine_similarity(query_vec, tfidf_matrix).flatten()
+    top_items = np.argsort(scores)[::-1][1:top_k+1]  # exclude self
+    return top_items
+
+# -------------------------------
+# Evaluation Metrics
+# -------------------------------
+def recall_at_k(recommended, relevant, k):
+    recommended_k = recommended[:k]
+    relevant_set = set(relevant)
+    return len(set(recommended_k) & relevant_set) / max(len(relevant_set), 1)
+
+def ndcg_at_k(recommended, relevant, k):
+    dcg = 0.0
+    for i, item in enumerate(recommended[:k]):
+        if item in relevant:
+            dcg += 1 / math.log2(i + 2)
+    ideal_dcg = sum(1 / math.log2(i + 2) for i in range(min(len(relevant), k)))
+    return dcg / ideal_dcg if ideal_dcg > 0 else 0.0
+
+def evaluate_model(recommend_fn, ground_truth, k=10):
+    recalls = []
+    ndcgs = []
+
+    for item_id, relevant_items in ground_truth.items():
+        recommended_items = recommend_fn(item_id, k)
+        recalls.append(recall_at_k(recommended_items, relevant_items, k))
+        ndcgs.append(ndcg_at_k(recommended_items, relevant_items, k))
+
+    return np.mean(recalls), np.mean(ndcgs)
+
+# -------------------------------
+# Ground Truth Setup
+# -------------------------------
+# Build ground truth automatically based on category and brand similarity
+ground_truth = {}
+
+# Sample 50 products for evaluation (adjust as needed)
+np.random.seed(42)
+test_indices = np.random.choice(len(products), min(5000, len(products)), replace=False)
+
+for idx in test_indices:
+    product = products[idx]
+    relevant_items = []
+    
+    # Find similar products (same category or same brand, excluding self)
+    for i, p in enumerate(products):
+        if i == idx:
+            continue
+        
+        # Same category or same brand = relevant
+        if (p.get('category') == product.get('category') or 
+            p.get('brand') == product.get('brand')):
+            relevant_items.append(i)
+    
+    # Only add to ground truth if we have relevant items
+    if len(relevant_items) > 0:
+        ground_truth[idx] = relevant_items[:20]  # Limit to top 20 relevant items
+
+print(f"Ground truth created: {len(ground_truth)} test items with relevant products")
+print(f"Average relevant items per test item: {np.mean([len(v) for v in ground_truth.values()]):.1f}")
+
+# -------------------------------
+# Evaluate TF-IDF Baseline
+# -------------------------------
+recall_10, ndcg_10 = evaluate_model(recommend, ground_truth, k=10)
+
+print("\n--- RESULTS ---")
+print(f"\nRecall@10: {recall_10:.4f}")
+print(f"\nNDCG@10:   {ndcg_10:.4f}")
+print("\n----------------")

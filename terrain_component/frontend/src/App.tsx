@@ -26,7 +26,7 @@ import {
   withStreamlitConnection,
   type ComponentProps,
 } from "streamlit-component-lib";
-import type { TerrainPayload, TerrainPoint, TerrainBounds } from "./types";
+import type { TerrainPayload, TerrainPoint, TerrainBounds, GroupLabel } from "./types";
 
 // Fluffy cartoon cloud component
 const CartoonCloud = ({ 
@@ -728,6 +728,49 @@ const ProductLabels = ({
   </group>
 );
 
+// Group labels that show category clusters on the terrain
+const GroupLabels = ({ 
+  groupLabels, 
+  sampleHeight 
+}: { 
+  groupLabels: Array<{ label: string; position: [number, number, number]; color: string; count: number }>;
+  sampleHeight: HeightSampler;
+}) => (
+  <group>
+    {groupLabels.map((group, index) => {
+      const terrainHeight = sampleHeight(group.position[0], group.position[2]);
+      const y = Math.max(terrainHeight, 0.5) + 0.5; // Place just above ground
+      
+      return (
+        <Billboard
+          key={`group-label-${index}`}
+          position={[group.position[0], y, group.position[2]]}
+          follow
+        >
+          <Html 
+            center 
+            transform 
+            distanceFactor={12}
+            style={{ pointerEvents: "none" }}
+            zIndexRange={[0, 30]}
+          >
+            <div
+              className="group-label"
+              style={{ 
+                backgroundColor: `${group.color}22`,
+                borderColor: group.color,
+              }}
+            >
+              <span className="group-label-text">{group.label}</span>
+              <span className="group-label-count">{group.count} products</span>
+            </div>
+          </Html>
+        </Billboard>
+      );
+    })}
+  </group>
+);
+
 const HighlightMarkers = ({ points }: { points: TerrainPoint[] }) => (
   <group>
     {points.map((point) => (
@@ -1326,6 +1369,7 @@ function Scene({
   terrainData,
   highlightedIds,
   onRightClick,
+  groupLabels,
 }: {
   payload: TerrainPayload;
   filteredPoints: TerrainPoint[];
@@ -1337,6 +1381,7 @@ function Scene({
   terrainData: ReturnType<typeof useTerrainData>;
   highlightedIds?: Set<string>;
   onRightClick?: (point: TerrainPoint, event: React.MouseEvent) => void;
+  groupLabels?: Array<{ label: string; position: [number, number, number]; color: string; count: number }>;
 }) {
   const bounds = useMemo(() => deriveBounds(payload), [payload]);
   const highlightPoints = useMemo(
@@ -1402,6 +1447,9 @@ function Scene({
         highlightedIds={highlightedIds}
         onRightClick={onRightClick}
       />
+      {groupLabels && groupLabels.length > 0 && (
+        <GroupLabels groupLabels={groupLabels} sampleHeight={sampleHeight} />
+      )}
       <HighlightMarkers points={highlightPoints} />
       <OrbitControls
         ref={orbitControlsRef as any}
@@ -1678,6 +1726,7 @@ const TerrainApp = (props: ComponentProps) => {
         terrainData={terrainData}
         highlightedIds={searchHighlightedIds}
         onRightClick={handleProductRightClick}
+        groupLabels={payload.groupLabels}
       />
       <NarrationPanel payload={payload} />
       <ControlIndicators visible={!tourActive} />
