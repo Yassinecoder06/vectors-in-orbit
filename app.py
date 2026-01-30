@@ -13,6 +13,7 @@ Architecture:
 import streamlit as st
 import json
 import time
+import random
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import numpy as np
@@ -25,7 +26,51 @@ from streamlit_swipecards import streamlit_swipecards
 from search_pipeline import search_products, get_qdrant_client, PRODUCTS_COLLECTION
 from interaction_logger import log_interaction, get_interaction_stats_by_type
 
-# Import visualization functions
+# Import terrain component
+from terrain_component import terrain_canvas
+
+# Import financial visualization functions
+from financial_semantic_viz import (
+    determine_safety_colors,
+    build_search_result_terrain_payload,
+)
+
+# =============================================================================
+# Image URL Helper
+# =============================================================================
+
+PLACEHOLDER_IMAGE = "https://via.placeholder.com/400x400?text=No+Image"
+
+def normalize_image_url(url: str) -> str:
+    """
+    Normalize an image URL with fallback to placeholder.
+    
+    Handles:
+    - None/empty values
+    - Whitespace stripping
+    - Protocol-relative URLs (//example.com)
+    - Invalid schemes
+    
+    Returns a valid image URL or placeholder.
+    """
+    if not url:
+        return PLACEHOLDER_IMAGE
+    
+    url = str(url).strip()
+    
+    if not url:
+        return PLACEHOLDER_IMAGE
+    
+    # Handle protocol-relative URLs
+    if url.startswith("//"):
+        url = "https:" + url
+    
+    # Validate URL scheme
+    if not url.startswith(("http://", "https://", "data:")):
+        return PLACEHOLDER_IMAGE
+    
+    return url
+
 
 # =============================================================================
 # Interaction Hooks
@@ -292,14 +337,22 @@ st.markdown("""
     }
     
     /* Make swipe cards adjust to content and center */
-    iframe[title*="streamlit_swipecards"] {
-        height: auto !important;
-        min-height: 600px !important;
+    iframe[title*="streamlit_swipecards"],
+    iframe[title*="swipe"],
+    .stCustomComponentV1 iframe {
+        height: 900px !important;
+        min-height: 900px !important;
         width: 75% !important;
         max-width: 75% !important;
         margin-left: auto !important;
         margin-right: auto !important;
         display: block !important;
+    }
+    
+    /* Also target parent container */
+    .stCustomComponentV1 {
+        height: 900px !important;
+        min-height: 900px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -387,6 +440,7 @@ def _load_brand_category_options_from_qdrant() -> Tuple[List[str], List[str]]:
                 with_payload=True,
                 with_vectors=False,
                 offset=next_page,
+                timeout=30,  # 30 second timeout
             )
 
             if not points:
@@ -436,6 +490,9 @@ def init_session_state():
         "view_mode": "Swipe",  # 'Swipe', 'Cart', or 'Review'
         "current_index": 0,
         "last_queue_query": None,
+        # 3D Terrain
+        "terrain_seed": 42,
+        "selected_terrain_product": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -462,14 +519,30 @@ def render_sidebar():
     
     # Navigation Switch
     st.sidebar.subheader("Navigation")
+    view_options = ["Swipe & Shop", "3D Landscape", "My Cart"]
+    current_index = 0
+    if st.session_state.view_mode == "3D":
+        current_index = 1
+    elif st.session_state.view_mode == "Cart":
+        current_index = 2
+    
+    def format_nav(x):
+        if x == "My Cart":
+            return f"🛒 Cart ({len(st.session_state.cart)})"
+        elif x == "3D Landscape":
+            return "🗺️ 3D Landscape"
+        return "🔍 Swipe & Shop"
+    
     mode = st.sidebar.radio(
         "View Mode",
-        ["Swipe & Shop", "My Cart"],
-        index=0 if st.session_state.view_mode == "Swipe" else 1,
-        format_func=lambda x: f"🛒 Cart ({len(st.session_state.cart)})" if x == "My Cart" else "🔍 Swipe & Shop"
+        view_options,
+        index=current_index,
+        format_func=format_nav
     )
     if mode == "Swipe & Shop":
         st.session_state.view_mode = "Swipe"
+    elif mode == "3D Landscape":
+        st.session_state.view_mode = "3D"
     else:
         st.session_state.view_mode = "Cart"
     
@@ -909,23 +982,20 @@ def render_swipe_cards():
     remaining_products = st.session_state.discovery_queue
     if not remaining_products:
         return
-
-    # Get Top Card (front of stack)
-    product = remaining_products[0]
-    payload = product.get("payload", {})
     
     # Prepare stack cards - simplified with just name and price
     cards = []
     for idx, p in enumerate(remaining_products):
         p_payload = p.get("payload", {})
-        p_name = p_payload.get("name", "Unknown")
+        p_name = p_payload.get("name", "Unknown")[:50]  # Truncate for compact display
         p_price = p_payload.get("price", 0)
+        p_image = normalize_image_url(p_payload.get("image_url"))
 
         cards.append({
             "id": p.get("id") or p_payload.get("product_id") or f"idx_{idx}",
             "name": p_name,
-            "description": f"**${p_price:,.2f}**",
-            "image": p_payload.get("image_url", "https://via.placeholder.com/400x400?text=No+Image"),
+            "description": f"${p_price:,.2f}",  # Plain price, no markdown
+            "image": p_image,
         })
     
     # Single key for the entire session - component tracks swipes internally
@@ -938,10 +1008,16 @@ def render_swipe_cards():
         view="desktop"
     )
     
+    # Determine current card index based on swipes
+    current_card_index = 0
+    swiped_cards = []
+    remaining_count = len(cards)
+    
     # Process result - component returns all swiped cards info
     if result and isinstance(result, dict):
         swiped_cards = result.get("swipedCards", [])
         remaining_count = result.get("remainingCards", len(cards))
+        current_card_index = len(swiped_cards)  # Next card after all swiped ones
         
         # Debug info
         if "debug_swipe" not in st.session_state:
@@ -983,31 +1059,36 @@ def render_swipe_cards():
             else:
                 st.info("You didn't like any products. Try a new search!")
 
-    # Combined details and explanation section
-    with st.expander("🔍 View Details & Why We Recommended This", expanded=False):
-        on_product_click(product, st.session_state.search_query)
+    # Get current product based on swipe progress
+    if current_card_index < len(remaining_products):
+        product = remaining_products[current_card_index]
+        payload = product.get("payload", {})
         
-        st.markdown("### Product Details")
-        st.write(payload.get("description", "No description available"))
-        
-        st.markdown("### Why We Recommended This")
-        explanations = product.get("explanations", [])
-        if explanations:
-            for i, exp in enumerate(explanations, 1):
-                st.write(f"{i}. {exp}")
-        else:
-            st.caption("No explanation available.")
-        
-        st.markdown("---")
-        
-        render_explanation(
-            product.get("semantic_score", 0.0),
-            product.get("affordability_score", 0.0),
-            product.get("preference_score", 0.0),
-            product.get("collaborative_score", 0.0),
-            product.get("popularity_score", 0.0),
-            payload,
-        )
+        # Combined details and explanation section
+        with st.expander(f"🔍 View Details: {payload.get('name', 'Product')[:40]}", expanded=False):
+            on_product_click(product, st.session_state.search_query)
+            
+            st.markdown("### Product Details")
+            st.write(payload.get("description", "No description available"))
+            
+            st.markdown("### Why We Recommended This")
+            explanations = product.get("explanations", [])
+            if explanations:
+                for i, exp in enumerate(explanations, 1):
+                    st.write(f"{i}. {exp}")
+            else:
+                st.caption("No explanation available.")
+            
+            st.markdown("---")
+            
+            render_explanation(
+                product.get("semantic_score", 0.0),
+                product.get("affordability_score", 0.0),
+                product.get("preference_score", 0.0),
+                product.get("collaborative_score", 0.0),
+                product.get("popularity_score", 0.0),
+                payload,
+            )
 
 
 def render_swipe_ui():
@@ -1106,10 +1187,160 @@ def render_cart_ui():
             st.rerun()
 
 
+def render_3d_landscape_ui():
+    """Render the 3D Terrain Landscape view."""
+    st.title("🗺️ 3D Financial Landscape")
+    st.markdown(
+        "Explore your search results in an interactive 3D landscape. "
+        "**Green markers** = safe & affordable. **Orange markers** = risky/stretched. "
+        "**Red markers** = unsafe/unaffordable."
+    )
+    
+    # Check if we have search results
+    results = st.session_state.discovery_queue
+    
+    if not results:
+        st.info("👋 No products loaded yet. Use the search in the sidebar to discover products.")
+        if st.button("Load Default Products", type="primary"):
+            with st.spinner("Loading products..."):
+                load_discovery_queue()
+            st.rerun()
+        return
+    
+    try:
+        if len(results) < 3:
+            st.warning("Need at least 3 products for visualization. Try searching for more results.")
+            return
+            
+        prices = []
+        final_scores = []
+        
+        user_context = build_user_context()
+        total_budget = user_context["available_balance"] + user_context["credit_limit"]
+        
+        # Map risk tolerance to numeric
+        risk_tolerance_map = {"Low": 0.2, "Medium": 0.5, "High": 0.8}
+        user_risk_tolerance = risk_tolerance_map.get(user_context["risk_tolerance"], 0.5)
+        
+        for result in results:
+            payload = result.get("payload", {})
+            prices.append(payload.get("price", 0.0))
+            final_scores.append(result.get("final_score", 0.0))
+        
+        # Prepare metadata for safety color calculation
+        finance_metadata = {
+            'prices': np.array(prices),
+            'user_budgets': np.array([total_budget] * len(prices)),
+            'risk_tolerances': np.array([user_risk_tolerance] * len(prices)),
+            'final_scores': np.array(final_scores)
+        }
+        
+        # Display safety color statistics
+        safety_colors = determine_safety_colors(finance_metadata)
+        green_count = np.sum(safety_colors == 'green')
+        orange_count = np.sum(safety_colors == 'orange')
+        red_count = np.sum(safety_colors == 'red')
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("🟢 Safe & Affordable", f"{green_count}")
+        with col2:
+            st.metric("🟠 Risky/Stretched", f"{orange_count}")
+        with col3:
+            st.metric("🔴 Unsafe", f"{red_count}")
+        with col4:
+            avg_score = np.mean(finance_metadata['final_scores'])
+            st.metric("Avg Score", f"{avg_score:.2f}")
+        
+        # Additional metrics
+        col1, col2 = st.columns(2)
+        with col1:
+            st.info(f"**Your Budget:** ${total_budget:,.2f}")
+        with col2:
+            st.info(f"**Avg Product Price:** ${np.mean(finance_metadata['prices']):,.2f}")
+
+        st.markdown("---")
+        st.markdown("#### ⚡ 3D Terrain Explorer")
+        st.caption(
+            "Interactive 3D terrain with product markers. "
+            "Use WASD keys to navigate, click products to select."
+        )
+
+        toggle_col, shuffle_col = st.columns([4, 1])
+        with toggle_col:
+            show_terrain = st.toggle(
+                "Enable 3D terrain",
+                value=True,
+                key="terrain_toggle",
+            )
+        with shuffle_col:
+            if show_terrain and st.button("Shuffle seed", use_container_width=True):
+                st.session_state.terrain_seed = random.randint(1, 1_000_000)
+                st.rerun()
+
+        if show_terrain:
+            with st.spinner("Rendering 3D terrain..."):
+                terrain_payload = build_search_result_terrain_payload(
+                    results=results,
+                    coords=None,  # No UMAP coords needed - function handles positioning
+                    user_risk_tolerance=user_risk_tolerance,
+                    budget_override=total_budget,
+                    random_seed=int(st.session_state.terrain_seed),
+                )
+
+            if terrain_payload:
+                selected_terrain = terrain_canvas(
+                    data=terrain_payload,
+                    height=650,
+                    key=f"terrain_canvas_{terrain_payload.get('meta', {}).get('seed', st.session_state.terrain_seed)}",
+                )
+                if selected_terrain:
+                    st.session_state.selected_terrain_product = selected_terrain
+                st.caption(
+                    "Click and drag to orbit the scene. Scroll to zoom. WASD to navigate."
+                )
+
+                selected_product = st.session_state.get("selected_terrain_product")
+                if selected_product:
+                    st.markdown("##### 🧭 Selected Terrain Product")
+                    left, right = st.columns([1, 2])
+                    with left:
+                        image_url = selected_product.get("imageUrl") or ""
+                        if image_url:
+                            st.image(image_url, width=220)
+                    with right:
+                        st.markdown(f"**{selected_product.get('name', 'Unknown Product')}**")
+                        st.caption(
+                            f"${selected_product.get('price', 0):,.2f} · "
+                            f"{selected_product.get('brand', 'Unknown')} · "
+                            f"{selected_product.get('category', 'Unknown')}"
+                        )
+                        description = selected_product.get("description") or "No description available."
+                        st.write(description)
+                        
+                        # Add to cart button for selected product
+                        if st.button("🛒 Add to Cart", key="terrain_add_cart", use_container_width=True):
+                            # Find the matching product in results
+                            for result in results:
+                                payload = result.get("payload", {})
+                                if payload.get("name") == selected_product.get("name"):
+                                    on_add_to_cart(result, st.session_state.get("search_query", ""))
+                                    break
+            else:
+                st.warning("Unable to create the terrain payload. Try again in a moment.")
+                
+    except Exception as e:
+        st.error(f"Error creating visualization: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
 def render_main_area():
     """Render main area based on current view mode."""
     if st.session_state.view_mode == "Swipe":
         render_swipe_ui()
+    elif st.session_state.view_mode == "3D":
+        render_3d_landscape_ui()
     else:
         render_cart_ui()
 

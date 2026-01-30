@@ -135,6 +135,7 @@ def _get_embedding_model():
 def get_qdrant_client() -> QdrantClient:
     """
     Initialize Qdrant client from environment variables.
+    Includes timeout configuration for cloud deployments.
     """
     qdrant_url = os.environ.get("QDRANT_URL")
     qdrant_api_key = os.environ.get("QDRANT_API_KEY")
@@ -143,7 +144,11 @@ def get_qdrant_client() -> QdrantClient:
         logger.error("QDRANT_URL and QDRANT_API_KEY must be set.")
         raise EnvironmentError("Missing QDRANT_URL or QDRANT_API_KEY")
 
-    return QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+    return QdrantClient(
+        url=qdrant_url,
+        api_key=qdrant_api_key,
+        timeout=60,  # 60 second timeout for cloud operations
+    )
 
 
 def embed_query(text: str, batch_size: int = 32) -> List[float]:
