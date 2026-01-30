@@ -692,7 +692,13 @@ const ProductLabels = ({
           position={[point.position[0], y, point.position[2]]}
           follow
         >
-          <Html center transform distanceFactor={8} style={{ pointerEvents: "auto" }}>
+          <Html 
+            center 
+            transform 
+            distanceFactor={8} 
+            style={{ pointerEvents: "auto" }}
+            zIndexRange={[0, 50]}
+          >
             <div
               className={`product-label ${isHighlighted ? 'highlighted' : ''} ${isTopProduct ? 'top-product' : ''}`}
               data-rank={index + 1}
