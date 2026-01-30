@@ -639,7 +639,7 @@ const ProductBillboard = ({
         }}
       >
         <planeGeometry args={[size, size * 0.75]} />
-        <meshBasicMaterial map={texture} transparent side={THREE.DoubleSide} depthTest={false} />
+        <meshBasicMaterial map={texture} transparent side={THREE.DoubleSide} depthTest={true} depthWrite={false} />
       </mesh>
     </Billboard>
   );
