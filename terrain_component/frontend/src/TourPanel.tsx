@@ -12,6 +12,58 @@ interface TourPanelProps {
   highlights: Highlight[];
 }
 
+// Simple description formatter - handles **headers**, bullet points, and paragraphs
+function FormattedDescription({ text }: { text: string }) {
+  const lines = text.split('\n');
+  const elements: JSX.Element[] = [];
+  let currentList: string[] = [];
+  
+  const flushList = (key: number) => {
+    if (currentList.length > 0) {
+      elements.push(
+        <ul key={`list-${key}`} className="tour-desc-list">
+          {currentList.map((item, i) => (
+            <li key={i}>{item}</li>
+          ))}
+        </ul>
+      );
+      currentList = [];
+    }
+  };
+  
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    
+    // Check for **Header** pattern (entire line is bold)
+    const headerMatch = trimmed.match(/^\*\*(.+?)\*\*$/);
+    if (headerMatch) {
+      flushList(index);
+      elements.push(
+        <h5 key={`h-${index}`} className="tour-desc-header">{headerMatch[1]}</h5>
+      );
+      return;
+    }
+    
+    // Check for bullet point (- item or • item)
+    const bulletMatch = trimmed.match(/^[-•]\s*(.+)$/);
+    if (bulletMatch) {
+      currentList.push(bulletMatch[1]);
+      return;
+    }
+    
+    // Regular text
+    flushList(index);
+    elements.push(
+      <p key={`p-${index}`} className="tour-desc-text">{trimmed}</p>
+    );
+  });
+  
+  flushList(lines.length);
+  
+  return <>{elements}</>;
+}
+
 export default function TourPanel({
   tourActive,
   currentStep,
@@ -48,7 +100,7 @@ export default function TourPanel({
       <div className="tour-panel tour-active">
         <div className="tour-header">
           <span className="tour-badge">Tour</span>
-          <button className="tour-close" onClick={onEnd}>✕</button>
+          <button className="tour-close" onClick={onEnd} title="Cancel Tour">✕</button>
         </div>
         <div className="tour-content">
           <h3>Welcome to the Tour! 👋</h3>
@@ -70,7 +122,7 @@ export default function TourPanel({
       <div className="tour-panel tour-active">
         <div className="tour-header">
           <span className="tour-badge">Tour Complete</span>
-          <button className="tour-close" onClick={onEnd}>✕</button>
+          <button className="tour-close" onClick={onEnd} title="Close">✕</button>
         </div>
         <div className="tour-content">
           <h3>Tour Complete! 🎉</h3>
@@ -91,8 +143,8 @@ export default function TourPanel({
     <div className="tour-panel tour-active">
       <div className="tour-header">
         <span className="tour-badge">Tour</span>
+        <button className="tour-close" onClick={onEnd} title="Cancel Tour">✕</button>
         <span className="tour-step">{currentStep} of {totalSteps}</span>
-        <button className="tour-close" onClick={onEnd}>✕</button>
       </div>
       {currentProduct && (
         <div className="tour-product">
@@ -114,7 +166,9 @@ export default function TourPanel({
               )}
             </div>
             {currentProduct.description && (
-              <p className="tour-description">{currentProduct.description}</p>
+              <div className="tour-description">
+                <FormattedDescription text={currentProduct.description} />
+              </div>
             )}
             {currentProduct.category && (
               <span className="tour-category">{currentProduct.category}</span>

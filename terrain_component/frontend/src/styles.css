@@ -316,14 +316,16 @@ body,
 
 .tour-step {
   flex: 1;
-  text-align: center;
+  text-align: right;
   font-size: 0.7rem;
   color: #94a3b8;
+  margin-right: 2rem;
 }
 
 .tour-close {
   width: 1.5rem;
   height: 1.5rem;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -409,6 +411,52 @@ body,
   color: #cbd5e1;
   line-height: 1.4;
   margin: 0 0 0.5rem 0;
+  max-height: 150px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.tour-description::-webkit-scrollbar {
+  width: 4px;
+}
+
+.tour-description::-webkit-scrollbar-track {
+  background: rgba(51, 65, 85, 0.3);
+  border-radius: 2px;
+}
+
+.tour-description::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 2px;
+}
+
+.tour-desc-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  margin: 0.5rem 0 0.25rem 0;
+}
+
+.tour-desc-header:first-child {
+  margin-top: 0;
+}
+
+.tour-desc-list {
+  margin: 0.25rem 0;
+  padding-left: 1rem;
+  list-style: disc;
+}
+
+.tour-desc-list li {
+  margin: 0.15rem 0;
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.tour-desc-text {
+  margin: 0.25rem 0;
+  font-size: 0.7rem;
+  color: #94a3b8;
 }
 
 .tour-category {
