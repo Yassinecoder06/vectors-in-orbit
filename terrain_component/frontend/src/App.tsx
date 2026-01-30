@@ -604,7 +604,114 @@ const Rock = ({ position, scale = 1 }: {
   </group>
 );
 
-// Forest decoration - places trees, bushes, and rocks around the terrain
+// Cottage/House component for village feel
+const Cottage = ({ 
+  position, 
+  scale = 1,
+  roofColor = "#8B4513"
+}: { 
+  position: [number, number, number]; 
+  scale?: number;
+  roofColor?: string;
+}) => (
+  <group position={position} scale={scale}>
+    {/* Base/walls */}
+    <mesh position={[0, 0.4, 0]}>
+      <boxGeometry args={[0.8, 0.8, 0.8]} />
+      <meshStandardMaterial color="#F5DEB3" roughness={0.8} />
+    </mesh>
+    {/* Roof */}
+    <mesh position={[0, 1, 0]} rotation={[0, Math.PI / 4, 0]}>
+      <coneGeometry args={[0.7, 0.6, 4]} />
+      <meshStandardMaterial color={roofColor} roughness={0.7} />
+    </mesh>
+    {/* Door */}
+    <mesh position={[0, 0.25, 0.41]}>
+      <boxGeometry args={[0.2, 0.4, 0.02]} />
+      <meshStandardMaterial color="#654321" />
+    </mesh>
+    {/* Window */}
+    <mesh position={[0.25, 0.5, 0.41]}>
+      <boxGeometry args={[0.15, 0.15, 0.02]} />
+      <meshStandardMaterial color="#87CEEB" metalness={0.3} />
+    </mesh>
+    {/* Chimney */}
+    <mesh position={[0.25, 1.2, 0]}>
+      <boxGeometry args={[0.15, 0.3, 0.15]} />
+      <meshStandardMaterial color="#8B0000" roughness={0.9} />
+    </mesh>
+  </group>
+);
+
+// Sun component - glowing sphere in the sky
+const Sun = ({ 
+  position = [80, 60, -40] as [number, number, number],
+  size = 12
+}: { 
+  position?: [number, number, number];
+  size?: number;
+}) => (
+  <group position={position}>
+    {/* Sun core - bright yellow */}
+    <mesh>
+      <sphereGeometry args={[size, 32, 32]} />
+      <meshBasicMaterial color="#FDB813" />
+    </mesh>
+    {/* Sun glow - larger transparent sphere */}
+    <mesh>
+      <sphereGeometry args={[size * 1.3, 32, 32]} />
+      <meshBasicMaterial color="#FFE484" transparent opacity={0.3} />
+    </mesh>
+    {/* Outer glow */}
+    <mesh>
+      <sphereGeometry args={[size * 1.8, 32, 32]} />
+      <meshBasicMaterial color="#FFF5D6" transparent opacity={0.15} />
+    </mesh>
+    {/* Point light from sun */}
+    <pointLight color="#FFEECC" intensity={0.8} distance={300} />
+  </group>
+);
+
+// Ocean rim component - creates a visible water ring around the terrain
+const OceanRim = ({ 
+  bounds, 
+  terrainRadius 
+}: { 
+  bounds: TerrainBounds; 
+  terrainRadius: number;
+}) => {
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+  
+  return (
+    <group position={[centerX, -1.5, centerZ]}>
+      {/* Main ocean plane */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[terrainRadius * 0.85, terrainRadius * 1.5, 64]} />
+        <meshStandardMaterial 
+          color="#5DADE2" 
+          transparent 
+          opacity={0.85}
+          metalness={0.3}
+          roughness={0.2}
+        />
+      </mesh>
+      {/* Deeper water further out */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.5, 0]}>
+        <ringGeometry args={[terrainRadius * 1.2, terrainRadius * 2, 64]} />
+        <meshStandardMaterial 
+          color="#3498DB" 
+          transparent 
+          opacity={0.9}
+          metalness={0.2}
+          roughness={0.3}
+        />
+      </mesh>
+    </group>
+  );
+};
+
+// Forest decoration - places trees, bushes, rocks, and houses around the terrain
 const ForestDecoration = ({ 
   bounds, 
   seed,
@@ -620,7 +727,8 @@ const ForestDecoration = ({
       position: [number, number, number];
       scale: number;
       color: string;
-      type: 'tree' | 'bush' | 'rock';
+      type: 'tree' | 'bush' | 'rock' | 'house';
+      rotation?: number;
     }> = [];
     
     const rand = mulberry32(seed + 999);
@@ -653,16 +761,24 @@ const ForestDecoration = ({
       "#556B2F",
     ];
     
-    // Generate 120-160 trees (more dense forest)
-    const numTrees = 120 + Math.floor(rand() * 40);
+    const roofColors = [
+      "#8B4513", // Saddle brown
+      "#A0522D", // Sienna
+      "#CD853F", // Peru
+      "#8B0000", // Dark red
+      "#654321", // Dark brown
+    ];
+    
+    // Generate 200-260 trees (much denser forest)
+    const numTrees = 200 + Math.floor(rand() * 60);
     
     // Generate trees in clusters for more natural look
-    const numClusters = 8 + Math.floor(rand() * 4);
+    const numClusters = 12 + Math.floor(rand() * 5);
     const clusterCenters: Array<{ x: number; z: number; colorBias: number }> = [];
     
     for (let c = 0; c < numClusters; c++) {
       const angle = (c / numClusters) * Math.PI * 2 + rand() * 0.5;
-      const dist = (0.25 + rand() * 0.5) * radius;
+      const dist = (0.2 + rand() * 0.55) * radius;
       clusterCenters.push({
         x: centerX + Math.cos(angle) * dist,
         z: centerZ + Math.sin(angle) * dist,
@@ -673,7 +789,7 @@ const ForestDecoration = ({
     for (let i = 0; i < numTrees; i++) {
       // Pick a cluster to spawn near
       const cluster = clusterCenters[Math.floor(rand() * clusterCenters.length)];
-      const clusterSpread = 8 + rand() * 12;
+      const clusterSpread = 6 + rand() * 14;
       
       const offsetAngle = rand() * Math.PI * 2;
       const offsetDist = rand() * clusterSpread;
@@ -685,7 +801,7 @@ const ForestDecoration = ({
       const normalizedDist = distFromCenter / radius;
       
       // Trees on lower slopes (avoid peaks and water)
-      if (normalizedDist > 0.12 && normalizedDist < 0.85) {
+      if (normalizedDist > 0.1 && normalizedDist < 0.88) {
         // Use sampleHeight if available for accurate positioning
         let baseHeight: number;
         if (sampleHeight) {
@@ -695,8 +811,8 @@ const ForestDecoration = ({
         }
         
         // Skip if would be in water
-        if (baseHeight > 0.8) {
-          const scale = 0.5 + rand() * 0.9;
+        if (baseHeight > 0.6) {
+          const scale = 0.4 + rand() * 1.0;
           
           // Mix autumn and evergreen based on cluster bias
           let color: string;
@@ -717,11 +833,11 @@ const ForestDecoration = ({
       }
     }
     
-    // Add bushes (60-80)
-    const numBushes = 60 + Math.floor(rand() * 20);
-    for (let i = 0; i < numBushes; i++) {
-      const angle = rand() * Math.PI * 2;
-      const dist = (0.15 + rand() * 0.7) * radius;
+    // Add houses/cottages (8-14 scattered around)
+    const numHouses = 8 + Math.floor(rand() * 6);
+    for (let i = 0; i < numHouses; i++) {
+      const angle = (i / numHouses) * Math.PI * 2 + rand() * 0.8;
+      const dist = (0.3 + rand() * 0.35) * radius; // Mid-range distance
       
       const x = centerX + Math.cos(angle) * dist;
       const z = centerZ + Math.sin(angle) * dist;
@@ -729,7 +845,7 @@ const ForestDecoration = ({
       const distFromCenter = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
       const normalizedDist = distFromCenter / radius;
       
-      if (normalizedDist > 0.1 && normalizedDist < 0.8) {
+      if (normalizedDist > 0.2 && normalizedDist < 0.7) {
         let baseHeight: number;
         if (sampleHeight) {
           baseHeight = sampleHeight(x, z);
@@ -737,11 +853,45 @@ const ForestDecoration = ({
           baseHeight = (1 - normalizedDist) * 8 + rand() * 2;
         }
         
-        if (baseHeight > 0.5 && baseHeight < 12) {
+        // Houses on flat-ish terrain, not in water
+        if (baseHeight > 1.5 && baseHeight < 10) {
+          treeList.push({
+            id: `house-${i}`,
+            position: [x, baseHeight, z],
+            scale: 0.8 + rand() * 0.5,
+            color: roofColors[Math.floor(rand() * roofColors.length)],
+            type: 'house',
+            rotation: rand() * Math.PI * 2,
+          });
+        }
+      }
+    }
+    
+    // Add bushes (80-110)
+    const numBushes = 80 + Math.floor(rand() * 30);
+    for (let i = 0; i < numBushes; i++) {
+      const angle = rand() * Math.PI * 2;
+      const dist = (0.12 + rand() * 0.72) * radius;
+      
+      const x = centerX + Math.cos(angle) * dist;
+      const z = centerZ + Math.sin(angle) * dist;
+      
+      const distFromCenter = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
+      const normalizedDist = distFromCenter / radius;
+      
+      if (normalizedDist > 0.08 && normalizedDist < 0.82) {
+        let baseHeight: number;
+        if (sampleHeight) {
+          baseHeight = sampleHeight(x, z);
+        } else {
+          baseHeight = (1 - normalizedDist) * 8 + rand() * 2;
+        }
+        
+        if (baseHeight > 0.4 && baseHeight < 14) {
           treeList.push({
             id: `bush-${i}`,
             position: [x, baseHeight, z],
-            scale: 0.6 + rand() * 0.6,
+            scale: 0.5 + rand() * 0.7,
             color: bushColors[Math.floor(rand() * bushColors.length)],
             type: 'bush',
           });
@@ -749,11 +899,11 @@ const ForestDecoration = ({
       }
     }
     
-    // Add rocks (30-50)
-    const numRocks = 30 + Math.floor(rand() * 20);
+    // Add rocks (40-65)
+    const numRocks = 40 + Math.floor(rand() * 25);
     for (let i = 0; i < numRocks; i++) {
       const angle = rand() * Math.PI * 2;
-      const dist = (0.05 + rand() * 0.9) * radius;
+      const dist = (0.05 + rand() * 0.88) * radius;
       
       const x = centerX + Math.cos(angle) * dist;
       const z = centerZ + Math.sin(angle) * dist;
@@ -768,11 +918,11 @@ const ForestDecoration = ({
         baseHeight = (1 - normalizedDist) * 8 + rand() * 2;
       }
       
-      if (baseHeight > 0.3) {
+      if (baseHeight > 0.2) {
         treeList.push({
           id: `rock-${i}`,
           position: [x, baseHeight, z],
-          scale: 0.5 + rand() * 1.5,
+          scale: 0.4 + rand() * 1.8,
           color: "#7f8c8d",
           type: 'rock',
         });
@@ -802,6 +952,16 @@ const ForestDecoration = ({
               scale={item.scale}
               color={item.color}
             />
+          );
+        } else if (item.type === 'house') {
+          return (
+            <group key={item.id} rotation={[0, item.rotation ?? 0, 0]}>
+              <Cottage
+                position={item.position}
+                scale={item.scale}
+                roofColor={item.color}
+              />
+            </group>
           );
         } else {
           return (
@@ -848,7 +1008,6 @@ function Scene({
   terrainData,
   highlightedIds,
   onRightClick,
-  environmentSettings,
 }: {
   payload: TerrainPayload;
   filteredPoints: TerrainPoint[];
@@ -869,7 +1028,7 @@ function Scene({
   const meshSeed = payload.meta?.seed ?? 1337;
   
   // Use terrain data from props
-  const { geometry, riverPoints, sampleHeight } = terrainData;
+  const { geometry, riverPoints, sampleHeight, terrainSize } = terrainData;
 
   // Ref for OrbitControls to enable keyboard navigation
   const orbitControlsRef = useRef<{
@@ -900,6 +1059,13 @@ function Scene({
       <directionalLight position={[40, 60, 30]} intensity={1.4} castShadow />
       <pointLight position={[-30, 25, -20]} intensity={0.4} color="#fff5e6" />
       <hemisphereLight color="#87CEEB" groundColor="#228B22" intensity={0.3} />
+      
+      {/* Sun in the sky */}
+      <Sun position={[bounds.maxX + diag * 0.8, 55, bounds.minZ - diag * 0.3]} size={10} />
+      
+      {/* Ocean rim around the circular terrain */}
+      <OceanRim bounds={bounds} terrainRadius={terrainSize / 2} />
+      
       <SkyDecoration bounds={bounds} seed={meshSeed} />
       <TerrainSurface geometry={geometry} riverPoints={riverPoints} bounds={bounds} />
       <ForestDecoration bounds={bounds} seed={meshSeed} sampleHeight={sampleHeight} />

@@ -28,18 +28,33 @@ function gaussian(
   return height * Math.exp(-dist2 / (2 * sigma * sigma));
 }
 
-// Multi-frequency noise for natural terrain variation
+// Multi-frequency noise for natural terrain variation - enhanced for rougher texture
 function terrainNoise(x: number, z: number, seed: number): number {
-  const f1 = 0.03;
-  const f2 = 0.07;
-  const f3 = 0.015;
+  // Low frequency - large terrain features
+  const f1 = 0.025;
+  const noise1 = Math.sin(x * f1 + seed * 0.01) * Math.cos(z * f1 - seed * 0.008) * 0.5;
   
-  const noise1 = Math.sin(x * f1 + seed * 0.01) * Math.cos(z * f1 - seed * 0.008) * 0.4;
-  const noise2 = Math.sin(x * f2 - 1.23) * Math.cos(z * f2 + 0.87) * 0.25;
-  const noise3 = Math.sin((x + z) * f3 + seed * 0.005) * 0.15;
-  const microNoise = Math.sin(x * 0.15 + 3.7) * Math.cos(z * 0.18 - 2.1) * 0.08;
+  // Medium frequency - hills and bumps
+  const f2 = 0.06;
+  const noise2 = Math.sin(x * f2 - 1.23) * Math.cos(z * f2 + 0.87) * 0.35;
   
-  return noise1 + noise2 + noise3 + microNoise;
+  // Higher frequency - terrain texture
+  const f3 = 0.12;
+  const noise3 = Math.sin(x * f3 + 2.1) * Math.cos(z * f3 - 1.4) * 0.25;
+  
+  // Fine detail - roughness
+  const f4 = 0.2;
+  const noise4 = Math.sin(x * f4 - 0.7) * Math.cos(z * f4 + 3.2) * 0.18;
+  
+  // Micro texture - graininess
+  const f5 = 0.35;
+  const microNoise = Math.sin(x * f5 + 3.7) * Math.cos(z * f5 - 2.1) * 0.12;
+  
+  // Ultra-fine noise for rough look
+  const f6 = 0.5;
+  const ultraFine = Math.sin(x * f6 + 1.3) * Math.cos(z * f6 + 0.9) * 0.08;
+  
+  return noise1 + noise2 + noise3 + noise4 + microNoise + ultraFine;
 }
 
 // Distance from point to line segment (for river carving)
