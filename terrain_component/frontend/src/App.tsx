@@ -621,7 +621,9 @@ const ProductBillboard = ({
 
   // Sample actual terrain height
   const terrainHeight = sampleHeight(point.position[0], point.position[2]);
-  const baseY = Math.max(terrainHeight, point.height);
+  // Ensure products are always above water level (water is at y = -1.5)
+  const minHeight = 0;
+  const baseY = Math.max(terrainHeight, point.height, minHeight);
   
   const size = THREE.MathUtils.clamp(1.6 + (point.price_normalized ?? 0) * 1.8, 1.5, 3.2) * 3.5;
   const baseLift = size * 0.75 + 0.6;
@@ -939,8 +941,8 @@ const OceanRim = ({
   
   return (
     <group position={[centerX, -1.5, centerZ]}>
-      {/* Main ocean plane */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+      {/* Main ocean plane - depthWrite false so products render over it */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} renderOrder={-1}>
         <ringGeometry args={[terrainRadius * 0.85, terrainRadius * 1.5, 64]} />
         <meshStandardMaterial 
           color="#5DADE2" 
@@ -948,10 +950,11 @@ const OceanRim = ({
           opacity={0.85}
           metalness={0.3}
           roughness={0.2}
+          depthWrite={false}
         />
       </mesh>
       {/* Deeper water further out */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.5, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.5, 0]} renderOrder={-2}>
         <ringGeometry args={[terrainRadius * 1.2, terrainRadius * 2, 64]} />
         <meshStandardMaterial 
           color="#3498DB" 
@@ -959,6 +962,7 @@ const OceanRim = ({
           opacity={0.9}
           metalness={0.2}
           roughness={0.3}
+          depthWrite={false}
         />
       </mesh>
     </group>
