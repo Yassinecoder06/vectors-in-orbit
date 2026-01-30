@@ -355,7 +355,7 @@ const useTerrainData = (
   }, [points, bounds, seed]);
 };
 
-// Main terrain surface component
+// Main terrain surface component with texture
 const TerrainSurface = ({
   geometry,
   riverPoints,
@@ -365,6 +365,13 @@ const TerrainSurface = ({
   riverPoints: RiverPoint[];
   bounds: TerrainBounds;
 }) => {
+  // Load terrain texture
+  const terrainTexture = useTexture('/diffuse_1SG_baseColor.jpeg', (tex) => {
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(8, 8); // Tile the texture across the terrain
+    tex.anisotropy = 16;
+  });
+
   useEffect(() => {
     return () => {
       geometry?.dispose();
@@ -374,7 +381,12 @@ const TerrainSurface = ({
   return (
     <group>
       <mesh geometry={geometry} receiveShadow castShadow>
-        <meshStandardMaterial vertexColors roughness={0.8} metalness={0.15} />
+        <meshStandardMaterial 
+          vertexColors 
+          map={terrainTexture}
+          roughness={0.85} 
+          metalness={0.1}
+        />
       </mesh>
       <RiverMesh riverPoints={riverPoints} bounds={bounds} />
     </group>
