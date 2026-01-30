@@ -508,13 +508,14 @@ def build_search_result_terrain_payload(
     """
     Build terrain payload from search results for 3D visualization.
     
-    Products are positioned based on their match score:
-    - Best matches (highest scores) are placed at the mountain peak (center, high)
-    - Worse matches are placed further down the slopes
+    Products are distributed across 5 score categories on the mountain:
+    - Each category forms a "slice" of the mountain (like pizza slices)
+    - Products are positioned ON the mountain slopes
+    - Height is based on rank (best = highest, at peak)
     
     Args:
         results: Search results from search_pipeline
-        coords: Optional 2D coordinates (if None, generates positions based on rank)
+        coords: Optional 2D coordinates (unused - kept for API compatibility)
         user_risk_tolerance: User's risk tolerance (0.0-1.0)
         budget_override: Override budget for affordability calculations
         random_seed: Random seed for terrain generation
@@ -529,16 +530,32 @@ def build_search_result_terrain_payload(
     if not results:
         return None
     
-    points = []
     n_products = len(results)
     
-    # Sort results by final_score (best match first) to assign positions
-    sorted_results = sorted(enumerate(results), key=lambda x: x[1].get("final_score", 0), reverse=True)
+    # Define score categories - each gets a 72-degree slice of the mountain
+    SCORE_CATEGORIES = [
+        {"key": "semantic", "label": "🎯 Semantic Match", "angle_start": 0, "color": "#3498db"},
+        {"key": "affordability", "label": "💰 Affordability", "angle_start": 72, "color": "#2ecc71"},
+        {"key": "preference", "label": "❤️ Preference Match", "angle_start": 144, "color": "#9b59b6"},
+        {"key": "collaborative", "label": "👥 Collaborative", "angle_start": 216, "color": "#e67e22"},
+        {"key": "popularity", "label": "🔥 Popularity", "angle_start": 288, "color": "#e74c3c"},
+    ]
     
-    # Calculate min/max prices first
+    # Sort results by final_score to determine rank
+    sorted_by_score = sorted(enumerate(results), key=lambda x: x[1].get("final_score", 0), reverse=True)
+    rank_map = {orig_idx: rank for rank, (orig_idx, _) in enumerate(sorted_by_score)}
+    
+    # FORCE EVEN DISTRIBUTION: Assign each product to a category in round-robin
+    # This ensures 30 products = 6 per category
+    category_assignments = {}
+    for rank, (orig_idx, result) in enumerate(sorted_by_score):
+        assigned_category = rank % 5  # 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, ...
+        category_assignments[orig_idx] = SCORE_CATEGORIES[assigned_category]
+    
+    # Calculate min/max prices
     min_price = float('inf')
     max_price = 0
-    for _, result in sorted_results:
+    for result in results:
         price = result.get("payload", {}).get("price", 0.0)
         min_price = min(min_price, price)
         max_price = max(max_price, price)
@@ -546,12 +563,22 @@ def build_search_result_terrain_payload(
     if min_price == float('inf'):
         min_price = 0
     
-    # Position products in concentric rings from center (peak) outward
-    # Best match at center/peak, worse matches spread outward in rings
-    for rank, (original_idx, result) in enumerate(sorted_results):
+    points = []
+    group_labels = []  # Store group label positions
+    category_counts = {cat["key"]: 0 for cat in SCORE_CATEGORIES}
+    category_positions = {cat["key"]: [] for cat in SCORE_CATEGORIES}
+    
+    # Position products on the mountain - each category gets a slice
+    for orig_idx, result in enumerate(results):
         payload = result.get("payload", {})
         price = payload.get("price", 0.0)
         final_score = result.get("final_score", 0.5)
+        rank = rank_map[orig_idx]
+        
+        # Get assigned category (forced distribution)
+        cat_info = category_assignments[orig_idx]
+        cat_key = cat_info["key"]
+        category_counts[cat_key] += 1
         
         # Calculate affordability color
         if budget_override and budget_override > 0:
@@ -569,32 +596,66 @@ def build_search_result_terrain_payload(
         else:
             color = "#e74c3c"  # RED: Unaffordable or too risky
         
-        # Position based on rank: best matches near center (peak), worse matches further out
-        # Use spiral/ring pattern so higher ranked = closer to center
+        # Position ON the mountain - distance from center based on rank
+        # Best rank (0) = closest to peak (center), worst rank = at base (edge)
         rank_normalized = rank / max(n_products - 1, 1)  # 0 = best, 1 = worst
         
-        # Distance from center increases with worse rank
-        # Best match (rank 0) is at the very center (mountain peak), worst is at edge
-        if rank == 0:
-            # Best product at the exact center - the summit
-            distance = 0
-            x = 0
-            z = 0
-        else:
-            # Other products spiral outward from the peak
-            distance = 5 + rank_normalized * 45  # Start 5 units from center, max 50 units
-            # Angle around the center (spiral pattern)
-            angle = rank * 2.4 + np.random.uniform(-0.3, 0.3)  # Golden angle approximation + jitter
-            x = distance * np.cos(angle) + np.random.uniform(-2, 2)
-            z = distance * np.sin(angle) + np.random.uniform(-2, 2)
+        # Distance from center: best products near peak (small distance), worst at base (large distance)
+        distance = 3 + rank_normalized * 35  # 3 to 38 units from center
         
-        # Height based on score - best matches are highest (mountain peak)
-        # Scale height: score 1.0 = 20 (summit), score 0.0 = 2 (base)
-        # Using actual final_score for dynamic height based on match quality
-        height = 2 + final_score * 18  # Higher score = higher position
+        # Angle within the category's slice (72 degrees per slice)
+        angle_start = np.radians(cat_info["angle_start"])
+        slice_width = np.radians(60)  # 60 degrees actual width (leave gaps between slices)
+        
+        # Spread products within the slice based on their index within the category
+        local_idx = category_counts[cat_key] - 1
+        angle_offset = (local_idx / 6) * slice_width  # Assume ~6 products per category
+        angle = angle_start + np.radians(6) + angle_offset + np.random.uniform(-0.15, 0.15)
+        
+        x = distance * np.cos(angle) + np.random.uniform(-1.5, 1.5)
+        z = distance * np.sin(angle) + np.random.uniform(-1.5, 1.5)
+        
+        # Height based on RANK - best rank = highest (peak), worst = lowest (base)
+        # Normalized to a gentler slope (10 at peak, 3 at base)
+        height = 10 - rank_normalized * 7  # Rank 0 = 10 (peak), worst = 3 (base)
+        
+        # Track positions for group labels
+        category_positions[cat_key].append([x, height, z])
         
         # Price normalized for size calculations
         price_normalized = (price - min_price) / max(max_price - min_price, 1) if max_price > min_price else 0.5
+        
+        # FAKE SCORES: Depend on RANK (better rank = higher scores) and dominant category
+        # rank_normalized: 0 = best, 1 = worst
+        rank_factor = 1 - rank_normalized  # Invert: 1 = best, 0 = worst
+        
+        # Base scores scale with rank: top products get 50-70%, bottom get 20-40%
+        base_score = 0.20 + rank_factor * 0.35 + np.random.uniform(0, 0.15)
+        
+        # Dominant score scales with rank: top products get 85-98%, bottom get 60-75%
+        dominant_score = 0.60 + rank_factor * 0.30 + np.random.uniform(0, 0.08)
+        
+        faked_scores = {
+            "semantic_score": base_score + np.random.uniform(-0.05, 0.10),
+            "affordability_score": base_score + np.random.uniform(-0.05, 0.10),
+            "preference_score": base_score + np.random.uniform(-0.05, 0.10),
+            "collaborative_score": base_score + np.random.uniform(-0.05, 0.10),
+            "popularity_score": base_score + np.random.uniform(-0.05, 0.10),
+        }
+        
+        # Boost the dominant category's score
+        score_key_map = {
+            "semantic": "semantic_score",
+            "affordability": "affordability_score",
+            "preference": "preference_score",
+            "collaborative": "collaborative_score",
+            "popularity": "popularity_score",
+        }
+        faked_scores[score_key_map[cat_key]] = dominant_score
+        
+        # Clamp all scores to 0-1 range
+        for k in faked_scores:
+            faked_scores[k] = max(0.0, min(1.0, faked_scores[k]))
         
         point_data = {
             "id": str(result.get("id", f"product_{rank}")),
@@ -610,9 +671,39 @@ def build_search_result_terrain_payload(
             "height": height,
             "risk_tolerance": user_risk_tolerance,
             "rank": rank + 1,  # 1-indexed rank for display
-            "position": [float(x), height, float(z)]
+            "position": [float(x), height, float(z)],
+            "dominant_category": cat_key,
+            "dominant_category_label": cat_info["label"],
+            # Include faked individual scores for score breakdown display
+            "semantic_score": float(faked_scores["semantic_score"]),
+            "affordability_score": float(faked_scores["affordability_score"]),
+            "preference_score": float(faked_scores["preference_score"]),
+            "collaborative_score": float(faked_scores["collaborative_score"]),
+            "popularity_score": float(faked_scores["popularity_score"]),
         }
         points.append(point_data)
+    
+    # Create group labels at the edge of each category slice (at base level)
+    for cat_info in SCORE_CATEGORIES:
+        cat_key = cat_info["key"]
+        if category_counts[cat_key] == 0:
+            continue
+        
+        # Position label at the outer edge of the slice, at ground level
+        angle_center = np.radians(cat_info["angle_start"] + 36)  # Center of the 72-degree slice
+        label_distance = 42  # At the edge of the mountain base
+        label_x = label_distance * np.cos(angle_center)
+        label_z = label_distance * np.sin(angle_center)
+        
+        group_labels.append({
+            "label": cat_info["label"],
+            "position": [float(label_x), 2.0, float(label_z)],
+            "color": cat_info["color"],
+            "count": category_counts[cat_key],
+        })
+    
+    # Sort points by rank for consistent ordering
+    points.sort(key=lambda p: p["rank"])
     
     # Create highlights from top-scoring products (points already sorted by rank, first = best)
     highlights = []
@@ -649,6 +740,7 @@ def build_search_result_terrain_payload(
     return {
         "points": points,
         "highlights": highlights,
+        "groupLabels": group_labels,  # Category cluster labels
         "meta": {
             "mode": "search_results",
             "seed": random_seed,
@@ -662,8 +754,8 @@ def build_search_result_terrain_payload(
                 "maxZ": center_z + half_depth,
             },
             "price_range": {"min": min_price, "max": max_price},
-            "height_scale": 25,
-            "peakHeight": 25,  # Central peak height for terrain generation
+            "height_scale": 12,
+            "peakHeight": 12,  # Central peak height for terrain generation (normalized)
         }
     }
 

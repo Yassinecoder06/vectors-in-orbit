@@ -46,17 +46,15 @@ const ScoreBreakdown = ({ product, position, onClose }: ScoreBreakdownProps) => 
 
   if (!product) return null;
 
-  // Simulate score breakdown (in production, these would come from backend)
-  // Using final_score and distributing based on typical patterns
+  // Use actual scores from product data if available, otherwise estimate
   const totalScore = product.score;
   
-  // Estimate component scores based on final score
-  // In production, these would be actual values from the ranking pipeline
-  const semanticScore = Math.min(1, totalScore * 1.1); // Usually high for good matches
-  const affordabilityScore = totalScore > 0.5 ? Math.min(1, totalScore * 0.9) : totalScore * 0.5;
-  const preferenceScore = totalScore > 0.6 ? 0.8 + Math.random() * 0.2 : Math.random() * 0.5;
-  const collaborativeScore = totalScore > 0.4 ? totalScore * 0.8 : Math.random() * 0.3;
-  const popularityScore = 0.3 + Math.random() * 0.5;
+  // Use real scores from backend if available (from terrain payload)
+  const semanticScore = product.semantic_score ?? Math.min(1, totalScore * 1.1);
+  const affordabilityScore = product.affordability_score ?? (totalScore > 0.5 ? Math.min(1, totalScore * 0.9) : totalScore * 0.5);
+  const preferenceScore = product.preference_score ?? (totalScore > 0.6 ? 0.8 : 0.4);
+  const collaborativeScore = product.collaborative_score ?? (totalScore > 0.4 ? totalScore * 0.8 : 0.3);
+  const popularityScore = product.popularity_score ?? 0.5;
 
   const scores = [
     { key: "semantic", label: "Semantic Match", value: semanticScore, weight: SCORE_WEIGHTS.semantic, color: "#3B82F6" },

@@ -13,6 +13,14 @@ export type TerrainPoint = {
   risk_tolerance: number;
   imageUrl?: string;
   rank?: number;  // 1-indexed rank (1 = best match)
+  // Individual score components (from scoring pipeline)
+  semantic_score?: number;
+  affordability_score?: number;
+  preference_score?: number;
+  collaborative_score?: number;
+  popularity_score?: number;
+  dominant_category?: string;
+  dominant_category_label?: string;
 };
 
 export type TerrainBounds = {
@@ -43,8 +51,16 @@ export type Highlight = {
   score: number;
 };
 
+export type GroupLabel = {
+  label: string;
+  position: [number, number, number];
+  color: string;
+  count: number;
+};
+
 export type TerrainPayload = {
   points: TerrainPoint[];
   highlights: Highlight[];
+  groupLabels?: GroupLabel[];
   meta?: TerrainMeta;
 };

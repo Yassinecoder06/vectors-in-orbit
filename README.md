@@ -310,7 +310,7 @@ python tools/check_gpu.py
 
 If you have a CUDA GPU but it's not detected:
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ### UI not opening
