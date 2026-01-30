@@ -1,0 +1,23 @@
+{
+  "weights": {
+    "semantic": 0.3368664158446387,
+    "affordability": 0.05469134976377246,
+    "preference": 0.050327713193023586,
+    "collaborative": 0.3368664158446387,
+    "popularity": 0.22124810535392647
+  },
+  "initial_reward": 487.11162447289263,
+  "final_reward": 487.11162447289263,
+  "improvement": 0.0,
+  "source": "qdrant",
+  "timestamp": 1769811799,
+  "semantic_min": 0.35,
+  "semantic_reward_boost": 2.0,
+  "explanations": {
+    "semantic": "increased because signal shows weak separation between high- and low-intent events (avg_high=0.00, avg_low=0.00).",
+    "affordability": "increased because signal shows weak separation between high- and low-intent events (avg_high=0.70, avg_low=0.71).",
+    "preference": "increased because signal shows weak separation between high- and low-intent events (avg_high=1.00, avg_low=0.99).",
+    "collaborative": "increased because higher scores align with add-to-cart/purchase events (avg_high=0.23, avg_low=0.06).",
+    "popularity": "increased because higher scores align with add-to-cart/purchase events (avg_high=0.16, avg_low=0.05)."
+  }
+}

@@ -580,7 +580,8 @@ def rerank_products(
         brand_match = any(pref in brand or brand in pref for pref in preferred_brands)
 
         if not preferred_categories and not preferred_brands:
-            preference_score = 1.0  # No penalty if user did not specify preferences
+            # No preference provided: exclude preference signal from reranking
+            preference_score = 0.0
         else:
             preference_score = 1.0 if (category_match or brand_match) else 0.0
 
@@ -598,12 +599,22 @@ def rerank_products(
         if not affordable:
             final_score = 0.0
         else:
+            # Dynamically re-normalize weights if preference is absent
+            weights = dict(FA_CF_WEIGHTS)
+            if not preferred_categories and not preferred_brands:
+                weights["preference"] = 0.0
+            total_weight = sum(max(0.0, v) for v in weights.values())
+            if total_weight <= 0:
+                weights = {k: 1.0 / len(weights) for k in weights}
+            else:
+                weights = {k: max(0.0, v) / total_weight for k, v in weights.items()}
+
             final_score = (
-                FA_CF_WEIGHTS["semantic"] * semantic_score +
-                FA_CF_WEIGHTS["affordability"] * affordability_score +
-                FA_CF_WEIGHTS["preference"] * preference_score +
-                FA_CF_WEIGHTS["collaborative"] * collaborative_score +
-                FA_CF_WEIGHTS["popularity"] * popularity_score
+                weights["semantic"] * semantic_score +
+                weights["affordability"] * affordability_score +
+                weights["preference"] * preference_score +
+                weights["collaborative"] * collaborative_score +
+                weights["popularity"] * popularity_score
             )
             final_score = _clamp01(final_score)
 
@@ -918,6 +929,39 @@ def _visualize_results(results: List[Dict[str, Any]], summary: Optional[Dict[str
 
     except Exception as e:
         print(f"⚠️ Visualization error: {e}")
+# =============================================================================
+# Compatibility Wrapper for Evaluation / APIs
+# =============================================================================
+
+class SearchPipeline:
+    """
+    Thin wrapper around search_products() for evaluation compatibility.
+    This avoids duplicating logic and keeps eval_accuracy.py unchanged.
+    """
+
+    def __init__(self):
+        pass
+
+    def search(self, query: str, user_id: str, top_k: int = 10):
+        """
+        Returns results in eval-friendly format:
+        [{ "id": product_id, "score": float }]
+        """
+        results = search_products(
+            user_id=user_id,
+            query=query,
+            top_k=top_k,
+            debug_mode=False,
+        )
+
+        # Normalize output for eval script
+        return [
+            {
+                "id": r.get("payload", {}).get("product_id", r.get("id")),
+                "score": r.get("final_score", 0.0),
+            }
+            for r in results
+        ]
 
 
 if __name__ == "__main__":
