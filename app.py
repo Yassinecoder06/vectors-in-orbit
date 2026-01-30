@@ -11,6 +11,7 @@ Architecture:
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import json
 import time
 import random
@@ -308,6 +309,90 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+    /* Global dark theme with white text */
+    .stApp {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    }
+    
+    /* Make all text white/light for better contrast */
+    .stApp, .stApp p, .stApp span, .stApp label, .stApp div {
+        color: #ffffff !important;
+    }
+    
+    /* Headers styling */
+    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+        color: #ffffff !important;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+    
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        border-right: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    [data-testid="stSidebar"] * {
+        color: #e0e0e0 !important;
+    }
+    
+    /* Card-like containers */
+    [data-testid="stExpander"] {
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+    }
+    
+    /* Metric styling */
+    [data-testid="stMetric"] {
+        background: rgba(255,255,255,0.08);
+        padding: 1rem;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    [data-testid="stMetricValue"] {
+        color: #00d4ff !important;
+        font-weight: bold;
+        text-shadow: 0 0 10px rgba(0,212,255,0.3);
+    }
+    
+    /* Button styling */
+    .stButton > button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white !important;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(102,126,234,0.4);
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(102,126,234,0.6);
+    }
+    
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        box-shadow: 0 4px 15px rgba(56,239,125,0.4);
+    }
+    
+    /* Info/Warning boxes */
+    .stAlert {
+        background: rgba(255,255,255,0.1) !important;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 10px;
+    }
+    
+    /* Input fields */
+    .stTextInput input, .stSelectbox select, .stMultiSelect {
+        background: rgba(255,255,255,0.1) !important;
+        border: 1px solid rgba(255,255,255,0.2) !important;
+        color: white !important;
+        border-radius: 8px;
+    }
+    
     .swipe-container {
         display: flex;
         justify-content: center;
@@ -323,15 +408,16 @@ st.markdown("""
     
     [data-testid="stImage"] img {
         object-fit: contain;
-        border-radius: 8px;
+        border-radius: 12px;
         max-height: 300px;
         width: 100%;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
     }
     
     /* Specific styling for cart thumbnails */
     .element-container [data-testid="stImage"] img {
         object-fit: cover;
-        border-radius: 8px;
+        border-radius: 12px;
         max-width: 100%;
         height: auto;
     }
@@ -340,22 +426,122 @@ st.markdown("""
     iframe[title*="streamlit_swipecards"],
     iframe[title*="swipe"],
     .stCustomComponentV1 iframe {
-        height: 900px !important;
-        min-height: 900px !important;
+        height: 1000px !important;
+        min-height: 1000px !important;
         width: 75% !important;
         max-width: 75% !important;
         margin-left: auto !important;
         margin-right: auto !important;
         display: block !important;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
     }
     
     /* Also target parent container */
     .stCustomComponentV1 {
-        height: 900px !important;
-        min-height: 900px !important;
+        height: 1000px !important;
+        min-height: 1000px !important;
+    }
+    
+    /* Divider styling */
+    hr {
+        border-color: rgba(255,255,255,0.1) !important;
+    }
+    
+    /* Toast notifications */
+    .stToast {
+        background: rgba(0,0,0,0.8) !important;
+        color: white !important;
+        border-radius: 10px;
+    }
+    
+    /* Progress bars */
+    .stProgress > div > div {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    /* Captions and small text */
+    .stCaption, small, .caption {
+        color: rgba(255,255,255,0.7) !important;
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Inject custom styles into swipe cards iframe using components.html for proper JS execution
+components.html("""
+<script>
+function styleSwipeCards() {
+    // Find parent document's iframes (go up from this component)
+    const parentDoc = window.parent.document;
+    const iframes = parentDoc.querySelectorAll('iframe[title*="streamlit_swipecards"], iframe[title*="swipe"], iframe[title*="component"]');
+    iframes.forEach(iframe => {
+        try {
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            if (doc && doc.body) {
+                let style = doc.getElementById('custom-swipe-style');
+                if (!style) {
+                    style = doc.createElement('style');
+                    style.id = 'custom-swipe-style';
+                    style.textContent = `
+                        body, html {
+                            background: linear-gradient(135deg, #1e1e2f 0%, #2d2d44 100%) !important;
+                        }
+                        * {
+                            color: #ffffff !important;
+                        }
+                        h1, h2, h3, h4, h5, h6 {
+                            color: #ffffff !important;
+                            text-align: center !important;
+                            font-size: 2.2rem !important;
+                            font-weight: 700 !important;
+                            text-shadow: 0 3px 10px rgba(0,0,0,0.6) !important;
+                            margin-bottom: 0.5rem !important;
+                        }
+                        p, span {
+                            color: #ffffff !important;
+                            text-align: center !important;
+                            font-size: 1.6rem !important;
+                            font-weight: 600 !important;
+                            text-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
+                        }
+                        [class*="title"], [class*="name"], [class*="heading"] {
+                            color: #ffffff !important;
+                            font-size: 2.2rem !important;
+                            font-weight: 700 !important;
+                            text-align: center !important;
+                            text-shadow: 0 3px 10px rgba(0,0,0,0.6) !important;
+                            letter-spacing: 0.5px !important;
+                        }
+                        [class*="description"], [class*="desc"], [class*="subtitle"], [class*="price"] {
+                            color: #00d4ff !important;
+                            font-size: 1.8rem !important;
+                            font-weight: 600 !important;
+                            text-align: center !important;
+                            text-shadow: 0 0 15px rgba(0,212,255,0.4) !important;
+                        }
+                        [class*="card"], .card {
+                            background: linear-gradient(145deg, #252540 0%, #1a1a30 100%) !important;
+                            border-radius: 20px !important;
+                            box-shadow: 0 15px 40px rgba(0,0,0,0.5) !important;
+                        }
+                        img {
+                            border-radius: 16px !important;
+                            box-shadow: 0 10px 30px rgba(0,0,0,0.4) !important;
+                        }
+                    `;
+                    doc.head.appendChild(style);
+                }
+            }
+        } catch(e) {
+            // Cross-origin restrictions may prevent styling
+        }
+    });
+}
+// Run immediately and keep polling for new iframes
+styleSwipeCards();
+setInterval(styleSwipeCards, 300);
+</script>
+""", height=0)
 
 # User personas for quick selection
 USER_PERSONAS = {
