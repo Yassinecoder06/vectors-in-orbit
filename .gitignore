@@ -36,3 +36,7 @@ docs/
 demos/
 #ressources
 ressources/
+
+# Build output
+dist/
+.vite/
