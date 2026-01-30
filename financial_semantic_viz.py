@@ -6,8 +6,8 @@ Not used for ranking, not used for recommendation logic.
 
 This module creates a "Financial Discovery Landscape" that visualizes:
 1. How similar products are to user queries (via semantic embeddings)
-2. Which are financially safe (affordability + risk tolerance) → shown
-3. Which are financially unsafe (unaffordable or risky) → hidden
+2. Which are financially safe (affordability vs budget) → shown
+3. Which are financially unsafe (unaffordable or stretched) → hidden
 
 PRINCIPLE:
 Traditional recommenders show everything and hope users ignore unsuitable items.
@@ -48,8 +48,6 @@ def load_product_data(filepath: str) -> Dict:
         "embedding": [0.1, 0.2, ..., 0.384],
         "price": 1299.99,
         "user_budget": 1500.0,
-        "risk_level": 0.3,  # 0=safe, 1=risky
-        "user_risk_tolerance": 0.5,  # 0=conservative, 1=aggressive
         "final_score": 0.87  # After CF + reranking
       },
       ...
@@ -79,24 +77,15 @@ def load_product_data(filepath: str) -> Dict:
         # Extract financial data
         price = product_info['price']
         user_budget = product_info['user_budget']
-        risk_level = product_info['risk_level']
-        user_risk_tolerance = product_info['user_risk_tolerance']
         final_score = product_info['final_score']
         
         # Compute affordability ratio: 0=affordable, 1=unaffordable
         affordability_ratio = min(1.0, price / user_budget) if user_budget > 0 else 1.0
         
-        # Compute risk safety: 0=safe, 1=unsafe
-        # Product is safe if risk_level <= user_risk_tolerance
-        risk_safety = max(0.0, risk_level - user_risk_tolerance)
-        
         finance_metadata[product_id] = {
             'price': price,
             'user_budget': user_budget,
             'affordability_ratio': affordability_ratio,
-            'risk_level': risk_level,
-            'user_risk_tolerance': user_risk_tolerance,
-            'risk_safety': risk_safety,
             'final_score': final_score
         }
     
@@ -159,27 +148,21 @@ def determine_safety_colors(finance_metadata: Dict) -> np.ndarray:
     """
     prices = finance_metadata['prices']
     user_budgets = finance_metadata['user_budgets']
-    risk_tolerances = finance_metadata['risk_tolerances']
-    
     colors = []
     for i in range(len(prices)):
         price = prices[i]
         budget = user_budgets[i]
-        tolerance = risk_tolerances[i]
         
         # Affordability ratio
         affordability_ratio = price / budget if budget > 0 else 1.0
         
-        # Financial risk calculation
-        risk_safety = abs(affordability_ratio - tolerance)  # How far from tolerance
-        
         # Color assignment logic
-        if affordability_ratio < 0.7 and risk_safety < 0.2:
+        if affordability_ratio < 0.7:
             colors.append('green')  # Safe and affordable
-        elif affordability_ratio < 0.7 and risk_safety < 0.5:
-            colors.append('orange')  # Affordable but risky
+        elif affordability_ratio < 1.0:
+            colors.append('orange')  # Affordable but stretched
         else:
-            colors.append('red')  # Unaffordable or too risky
+            colors.append('red')  # Unaffordable
     
     return np.array(colors)
 
@@ -193,9 +176,9 @@ def visualize_financial_landscape(coords: np.ndarray,
     Create a 2D scatter plot showing financial safety of products.
     
     COLOR SCHEME:
-    - GREEN: Affordable (ratio < 0.7) AND safe risk (safety < 0.2)
-    - ORANGE: Affordable but risk-borderline (0.2 <= safety < 0.5)
-    - RED: Unaffordable (ratio >= 0.7) OR high risk (safety >= 0.5)
+    - GREEN: Affordable (ratio < 0.7)
+    - ORANGE: Stretched (0.7 <= ratio < 1.0)
+    - RED: Unaffordable (ratio >= 1.0)
     
     POINT SIZE: Proportional to final_score
     - Larger = higher score (better match + better CF signal)
@@ -210,7 +193,7 @@ def visualize_financial_landscape(coords: np.ndarray,
     
     Args:
         coords: 2D coordinates from UMAP, shape (n_products, 2)
-        finance_metadata: Dict with affordability_ratio, risk_safety, final_score
+        finance_metadata: Dict with affordability_ratio and final_score
         product_ids: List of product identifiers for labeling
         title: Plot title
         figsize: Figure size in inches
@@ -226,7 +209,6 @@ def visualize_financial_landscape(coords: np.ndarray,
     
     prices = finance_metadata.get('prices', [])
     user_budgets = finance_metadata.get('user_budgets', [])
-    risk_tolerances = finance_metadata.get('risk_tolerances', [])
     final_scores = finance_metadata.get('final_scores', [])
     
     for i, product_id in enumerate(product_ids):
@@ -235,22 +217,20 @@ def visualize_financial_landscape(coords: np.ndarray,
             
         price = prices[i]
         budget = user_budgets[i]
-        tolerance = risk_tolerances[i]
         final_score = final_scores[i]
         
         # Calculate metrics
         affordability_ratio = price / budget if budget > 0 else 1.0
-        risk_safety = abs(affordability_ratio - tolerance)
         
         # Color assignment logic
-        if affordability_ratio < 0.7 and risk_safety < 0.2:
+        if affordability_ratio < 0.7:
             color = '#2ecc71'  # GREEN: Safe and affordable
             alpha = 0.8
-        elif affordability_ratio < 0.7 and risk_safety < 0.5:
-            color = '#f39c12'  # ORANGE: Affordable but risky
+        elif affordability_ratio < 1.0:
+            color = '#f39c12'  # ORANGE: Affordable but stretched
             alpha = 0.6
         else:
-            color = '#e74c3c'  # RED: Unaffordable or too risky
+            color = '#e74c3c'  # RED: Unaffordable
             alpha = 0.3
         
         colors.append(color)
@@ -269,8 +249,8 @@ def visualize_financial_landscape(coords: np.ndarray,
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='#2ecc71', edgecolor='black', label='Safe & Affordable (Recommended)'),
-        Patch(facecolor='#f39c12', edgecolor='black', label='Affordable but Risky (Filtered)'),
-        Patch(facecolor='#e74c3c', edgecolor='black', label='Unaffordable or Too Risky (Hidden)'),
+        Patch(facecolor='#f39c12', edgecolor='black', label='Affordable but Stretched (Filtered)'),
+        Patch(facecolor='#e74c3c', edgecolor='black', label='Unaffordable (Hidden)'),
     ]
     ax.legend(handles=legend_elements, loc='upper right', fontsize=11, framealpha=0.95)
     
@@ -290,7 +270,6 @@ def visualize_financial_landscape(coords: np.ndarray,
         "• Color = financial safety status\n\n"
         "WHY RED DOTS ARE HIDDEN:\n"
         "• Unaffordable for your budget\n"
-        "• Risk level exceeds your tolerance\n"
         "• Failed financial safety validation\n\n"
         "RECOMMENDATION INTEGRITY:\n"
         "Only GREEN dots are shown in recommendations.\n"
@@ -329,22 +308,18 @@ def demo():
     # Create synthetic product data
     products = {}
     user_budget = 2000.0
-    user_risk_tolerance = 0.4
     
     for i in range(n_products):
         product_id = f"product_{i:03d}"
         
-        # Vary prices and risks
+        # Vary prices
         price = np.random.uniform(100, 5000)
-        risk_level = np.random.uniform(0, 1)
         final_score = np.random.uniform(0.4, 1.0)  # After CF + reranking
         
         products[product_id] = {
             'embedding': embeddings[i].tolist(),
             'price': float(price),
             'user_budget': float(user_budget),
-            'risk_level': float(risk_level),
-            'user_risk_tolerance': float(user_risk_tolerance),
             'final_score': float(final_score)
         }
     
@@ -358,9 +333,6 @@ def demo():
                 'price': product_data['price'],
                 'user_budget': product_data['user_budget'],
                 'affordability_ratio': min(1.0, product_data['price'] / user_budget),
-                'risk_level': product_data['risk_level'],
-                'user_risk_tolerance': user_risk_tolerance,
-                'risk_safety': max(0.0, product_data['risk_level'] - user_risk_tolerance),
                 'final_score': product_data['final_score']
             }
             for product_id, product_data in products.items()
@@ -388,16 +360,16 @@ def demo():
     print("=" * 70)
     
     safe_count = sum(1 for m in data['finance_metadata'].values() 
-                     if m['affordability_ratio'] < 0.7 and m['risk_safety'] < 0.2)
+                     if m['affordability_ratio'] < 0.7)
     risky_count = sum(1 for m in data['finance_metadata'].values() 
-                      if m['affordability_ratio'] < 0.7 and 0.2 <= m['risk_safety'] < 0.5)
+                      if 0.7 <= m['affordability_ratio'] < 1.0)
     unsafe_count = sum(1 for m in data['finance_metadata'].values() 
-                       if m['affordability_ratio'] >= 0.7 or m['risk_safety'] >= 0.5)
+                       if m['affordability_ratio'] >= 1.0)
     
     print(f"Total products available: {len(products)}")
     print(f"  ✅ GREEN (Safe & Affordable): {safe_count} products (shown)")
-    print(f"  ⚠️  ORANGE (Affordable but Risky): {risky_count} products (filtered)")
-    print(f"  ❌ RED (Unaffordable or Too Risky): {unsafe_count} products (hidden)")
+    print(f"  ⚠️  ORANGE (Stretched): {risky_count} products (filtered)")
+    print(f"  ❌ RED (Unaffordable): {unsafe_count} products (hidden)")
     print(f"\nRecommendation Filtering: {(unsafe_count / len(products) * 100):.1f}% of products filtered out")
     print("=" * 70)
     
@@ -407,8 +379,7 @@ def demo():
 def export_products_for_visualization(
     client,  # QdrantClient instance
     user_id: str,
-    top_k: int = 50,
-    risk_tolerance: str = None  # Override risk tolerance from UI
+    top_k: int = 50
 ) -> Dict[str, Dict]:
     """
     Export product embeddings + financial metadata from Qdrant Cloud.
@@ -423,8 +394,6 @@ def export_products_for_visualization(
         client: QdrantClient connected to Qdrant Cloud
         user_id: User ID to filter financials and interactions
         top_k: Number of products to export (default 50)
-        risk_tolerance: Override risk tolerance (string: 'Low', 'Medium', 'High')
-        
     Returns:
         Dict matching visualization schema:
         {
@@ -432,52 +401,11 @@ def export_products_for_visualization(
             "embedding": [...],
             "price": float,
             "user_budget": float,
-            "risk_level": float,  # (affordability_ratio + financial_risk) / 2
-            "user_risk_tolerance": float,
             "final_score": float
           }
         }
     """
     try:
-        # Map categorical risk tolerance (low/medium/high) to numeric [0,1]
-        def _map_risk_tier_to_numeric(value: str) -> float:
-            if not isinstance(value, str):
-                return 0.5
-            tier = value.strip().lower()
-            # Handle common misspelling 'meduim' and synonyms
-            mapping = {
-                'low': 0.2,
-                'medium': 0.5,
-                'meduim': 0.5,
-                'mid': 0.5,
-                'high': 0.8,
-            }
-            return mapping.get(tier, 0.5)
-        
-        # Use passed risk_tolerance parameter if provided, otherwise try to get from Qdrant
-        if risk_tolerance:
-            user_risk_tolerance = _map_risk_tier_to_numeric(risk_tolerance)
-            user_risk_tier = risk_tolerance.lower()
-        else:
-            # Fallback to querying user_profiles collection
-            user_risk_tier = None
-            try:
-                user_profiles = client.scroll(
-                    collection_name="user_profiles",
-                    limit=1,
-                    with_payload=True,
-                    with_vectors=False,
-                )
-                if user_profiles[0]:
-                    for point in user_profiles[0]:
-                        if point.payload.get("user_id") == user_id:
-                            user_risk_tier = point.payload.get("risk_tolerance", "medium")
-                            break
-            except Exception as e:
-                pass  # Use default
-            
-            user_risk_tolerance = _map_risk_tier_to_numeric(user_risk_tier if user_risk_tier else "medium")
-        
         # ===== 2. Get User Financial Context (budget) =====
         user_budget = 5000.0  # Default budget
         try:
@@ -514,17 +442,10 @@ def export_products_for_visualization(
                     # Calculate affordability ratio
                     affordability_ratio = price / user_budget if user_budget > 0 else 1.0
                     
-                    # Risk level: combination of affordability and financial risk
-                    # Higher affordability_ratio = higher risk
-                    risk_level = min(affordability_ratio, 1.0)
-                    
                     products_dict[product_id] = {
                         "embedding": point.vector.tolist() if hasattr(point.vector, 'tolist') else list(point.vector),
                         "price": float(price),
                         "user_budget": float(user_budget),
-                        "risk_level": float(risk_level),
-                        "user_risk_tolerance": float(user_risk_tolerance),
-                        "user_risk_tier": (str(user_risk_tier).lower() if user_risk_tier is not None else "medium"),
                         "final_score": 0.75,  # Default score, will be updated with CF
                         "affordability_ratio": float(affordability_ratio),
                     }
@@ -575,6 +496,176 @@ def export_products_for_visualization(
     except Exception as e:
         print(f"Error in export_products_for_visualization: {e}")
         return {}
+
+
+def build_search_result_terrain_payload(
+    results: List[Dict],
+    coords: np.ndarray = None,
+    user_risk_tolerance: float = 0.5,
+    budget_override: float = None,
+    random_seed: int = 42,
+) -> Dict:
+    """
+    Build terrain payload from search results for 3D visualization.
+    
+    Products are positioned based on their match score:
+    - Best matches (highest scores) are placed at the mountain peak (center, high)
+    - Worse matches are placed further down the slopes
+    
+    Args:
+        results: Search results from search_pipeline
+        coords: Optional 2D coordinates (if None, generates positions based on rank)
+        user_risk_tolerance: User's risk tolerance (0.0-1.0)
+        budget_override: Override budget for affordability calculations
+        random_seed: Random seed for terrain generation
+        
+    Returns:
+        Dict payload for terrain_canvas component
+    """
+    import random
+    random.seed(random_seed)
+    np.random.seed(random_seed)
+    
+    if not results:
+        return None
+    
+    points = []
+    n_products = len(results)
+    
+    # Sort results by final_score (best match first) to assign positions
+    sorted_results = sorted(enumerate(results), key=lambda x: x[1].get("final_score", 0), reverse=True)
+    
+    # Calculate min/max prices first
+    min_price = float('inf')
+    max_price = 0
+    for _, result in sorted_results:
+        price = result.get("payload", {}).get("price", 0.0)
+        min_price = min(min_price, price)
+        max_price = max(max_price, price)
+    
+    if min_price == float('inf'):
+        min_price = 0
+    
+    # Position products in concentric rings from center (peak) outward
+    # Best match at center/peak, worse matches spread outward in rings
+    for rank, (original_idx, result) in enumerate(sorted_results):
+        payload = result.get("payload", {})
+        price = payload.get("price", 0.0)
+        final_score = result.get("final_score", 0.5)
+        
+        # Calculate affordability color
+        if budget_override and budget_override > 0:
+            affordability_ratio = price / budget_override
+        else:
+            affordability_ratio = 0.5
+        
+        risk_safety = abs(affordability_ratio - user_risk_tolerance)
+        
+        # Determine color based on affordability
+        if affordability_ratio < 0.7 and risk_safety < 0.2:
+            color = "#2ecc71"  # GREEN: Safe and affordable
+        elif affordability_ratio < 0.7 and risk_safety < 0.5:
+            color = "#f39c12"  # ORANGE: Affordable but risky
+        else:
+            color = "#e74c3c"  # RED: Unaffordable or too risky
+        
+        # Position based on rank: best matches near center (peak), worse matches further out
+        # Use spiral/ring pattern so higher ranked = closer to center
+        rank_normalized = rank / max(n_products - 1, 1)  # 0 = best, 1 = worst
+        
+        # Distance from center increases with worse rank
+        # Best match (rank 0) is at the very center (mountain peak), worst is at edge
+        if rank == 0:
+            # Best product at the exact center - the summit
+            distance = 0
+            x = 0
+            z = 0
+        else:
+            # Other products spiral outward from the peak
+            distance = 5 + rank_normalized * 45  # Start 5 units from center, max 50 units
+            # Angle around the center (spiral pattern)
+            angle = rank * 2.4 + np.random.uniform(-0.3, 0.3)  # Golden angle approximation + jitter
+            x = distance * np.cos(angle) + np.random.uniform(-2, 2)
+            z = distance * np.sin(angle) + np.random.uniform(-2, 2)
+        
+        # Height based on score - best matches are highest (mountain peak)
+        # Scale height: score 1.0 = 20 (summit), score 0.0 = 2 (base)
+        # Using actual final_score for dynamic height based on match quality
+        height = 2 + final_score * 18  # Higher score = higher position
+        
+        # Price normalized for size calculations
+        price_normalized = (price - min_price) / max(max_price - min_price, 1) if max_price > min_price else 0.5
+        
+        point_data = {
+            "id": str(result.get("id", f"product_{rank}")),
+            "name": payload.get("name", "Unknown Product"),
+            "price": float(price),
+            "price_normalized": price_normalized,
+            "brand": payload.get("brand", "Unknown"),
+            "category": payload.get("category", "Unknown"),
+            "description": payload.get("description", ""),
+            "imageUrl": payload.get("image_url", ""),
+            "score": float(final_score),
+            "color": color,
+            "height": height,
+            "risk_tolerance": user_risk_tolerance,
+            "rank": rank + 1,  # 1-indexed rank for display
+            "position": [float(x), height, float(z)]
+        }
+        points.append(point_data)
+    
+    # Create highlights from top-scoring products (points already sorted by rank, first = best)
+    highlights = []
+    for idx, point in enumerate(points[:min(7, len(points))]):
+        highlights.append({
+            "id": point["id"],
+            "label": f"#{point['rank']} {point['name'][:18]}..." if len(point['name']) > 18 else f"#{point['rank']} {point['name']}",
+            "position": point["position"],
+            "price": point["price"],
+            "brand": point["brand"],
+            "category": point["category"],
+            "score": point["score"],
+        })
+    
+    # Calculate bounds with padding for full mountain visibility
+    xs = [p["position"][0] for p in points]
+    zs = [p["position"][2] for p in points]
+    
+    # Add significant padding around products for full terrain
+    terrain_padding = 40
+    min_terrain_size = 120  # Minimum terrain dimension
+    
+    raw_min_x = min(xs) if xs else -20
+    raw_max_x = max(xs) if xs else 20
+    raw_min_z = min(zs) if zs else -20
+    raw_max_z = max(zs) if zs else 20
+    
+    # Ensure minimum size and add padding
+    center_x = (raw_min_x + raw_max_x) / 2
+    center_z = (raw_min_z + raw_max_z) / 2
+    half_width = max((raw_max_x - raw_min_x) / 2 + terrain_padding, min_terrain_size / 2)
+    half_depth = max((raw_max_z - raw_min_z) / 2 + terrain_padding, min_terrain_size / 2)
+    
+    return {
+        "points": points,
+        "highlights": highlights,
+        "meta": {
+            "mode": "search_results",
+            "seed": random_seed,
+            "count": len(points),
+            "budget": budget_override,
+            "riskTolerance": user_risk_tolerance,
+            "bounds": {
+                "minX": center_x - half_width,
+                "maxX": center_x + half_width,
+                "minZ": center_z - half_depth,
+                "maxZ": center_z + half_depth,
+            },
+            "price_range": {"min": min_price, "max": max_price},
+            "height_scale": 25,
+            "peakHeight": 25,  # Central peak height for terrain generation
+        }
+    }
 
 
 def demo_with_real_data(user_id: str = None, top_k: int = 50):
@@ -633,7 +724,6 @@ def demo_with_real_data(user_id: str = None, top_k: int = 50):
         finance_metadata = {
             'prices': np.array([products_dict[pid]['price'] for pid in product_ids]),
             'user_budgets': np.array([products_dict[pid]['user_budget'] for pid in product_ids]),
-            'risk_tolerances': np.array([products_dict[pid]['user_risk_tolerance'] for pid in product_ids]),
             'final_scores': np.array([products_dict[pid]['final_score'] for pid in product_ids])
         }
         
@@ -652,7 +742,7 @@ def demo_with_real_data(user_id: str = None, top_k: int = 50):
             
             print(f"\n📊 Financial Safety Distribution:")
             print(f"   🟢 GREEN (Safe & Affordable):  {green_count:3d} products ({100*green_count/len(safety_colors):.1f}%)")
-            print(f"   🟠 ORANGE (Risky/Stretched):   {orange_count:3d} products ({100*orange_count/len(safety_colors):.1f}%)")
+            print(f"   🟠 ORANGE (Stretched):        {orange_count:3d} products ({100*orange_count/len(safety_colors):.1f}%)")
             print(f"   🔴 RED (Unsafe/Unaffordable):  {red_count:3d} products ({100*red_count/len(safety_colors):.1f}%)")
             
             avg_score = np.mean(finance_metadata['final_scores'])
