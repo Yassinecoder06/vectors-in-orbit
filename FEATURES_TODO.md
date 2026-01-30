@@ -13,91 +13,66 @@
 - [x] WASD keyboard camera controls
 - [x] Click-to-focus on products
 - [x] Product selection with Streamlit integration
+- [x] **Product Image Previews** - hover cards with thumbnail, price, score
+- [x] **Filter Controls Overlay** - price range, score threshold, category/brand filters
+- [x] **Comparison Mode** - compare up to 3 products side-by-side
+- [x] **Search Within Visualization** - text search with highlighting
+- [x] **Time-of-Day / Weather Effects** - dawn/day/sunset/night + clear/cloudy/foggy/snowy
+- [x] **Score Breakdown Tooltips** - right-click to see 5-component score breakdown
+- [x] **Enhanced Forest** - 120+ trees in clusters, bushes, rocks
+- [x] **Entry Animations** - product labels fade in with staggered delays
+- [x] **Top Product Highlighting** - rank badges and glow effects for top 3
+- [x] **Weather Visual Effects** - fog overlay, snow particles
 
 ---
 
-## 🎯 High Priority Features
+## 🎯 High Priority Features (Remaining)
 
-### 1. Product Image Previews
-- Show product thumbnail on hover/focus
-- Mini image card floating near the product marker
-- Lazy load images for performance
-
-### 2. Category/Brand Color Coding
+### 1. Category/Brand Color Coding
 - Color-code product markers by category or brand
 - Add a legend overlay showing color meanings
 - Toggle between score-based and category-based coloring
 
-### 3. Filter Controls Overlay
-- Price range slider
-- Category checkboxes
-- Brand filter dropdown
-- Score threshold slider
-- Show/hide filtered products with fade animation
-
-### 4. Mini-Map Navigation
+### 2. Mini-Map Navigation
 - Small 2D overhead map in corner
 - Show all products as dots
 - Click to teleport camera
 - Highlight current viewport area
 
-### 5. Comparison Mode
-- Select 2-3 products to compare side-by-side
-- Show comparison panel with specs
-- Highlight selected products on terrain
-
 ---
 
-## 🚀 Medium Priority Features
+## 🚀 Medium Priority Features (Remaining)
 
-### 6. Animation Improvements
-- Smooth product entry animations on load
-- Pulsing effect for top-ranked products
-- Particle effects at mountain peak
-- Animated path "flow" showing rank direction
-
-### 7. Search Within Visualization
-- Text search box to highlight matching products
-- Zoom to search result
-- Highlight search matches with glow effect
-
-### 8. Time-of-Day / Weather Effects
-- Day/night cycle toggle
-- Sunrise/sunset lighting moods
-- Weather variations (clear, cloudy, misty)
-- Affects atmosphere and mood
-
-### 9. Product Clustering Visualization
+### 3. Product Clustering Visualization
 - Group similar products into visible clusters
 - Show cluster boundaries on terrain
 - Expand/collapse clusters on click
 
-### 10. Score Breakdown Tooltip
-- On hover, show pie chart of score components
-- Semantic, Affordability, Preference, Collaborative, Popularity
-- Visual explanation of why product ranked where it is
+### 4. Animated Path Flow
+- Animated path "flow" showing rank direction
+- Particle effects at mountain peak
 
 ---
 
 ## 💡 Nice-to-Have Features
 
-### 11. Export & Share
+### 5. Export & Share
 - Screenshot button (capture current view)
 - Share URL with camera position encoded
 - Export product list as CSV
 
-### 12. Accessibility Improvements
+### 6. Accessibility Improvements
 - Screen reader support for product info
 - High contrast mode
 - Keyboard-only navigation improvements
 - Reduce motion option
 
-### 13. Sound Design
+### 7. Sound Design
 - Ambient mountain/nature sounds
 - Click/selection sound effects
 - Tour narration audio option
 
-### 14. Performance Optimizations
+### 8. Performance Optimizations
 - Level-of-detail (LOD) for distant products
 - Frustum culling for off-screen elements
 - Instanced rendering for trees/decorations

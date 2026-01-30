@@ -10,6 +10,8 @@ import QueryPath from "./QueryPath";
 import FilterPanel, { FilterState, getDefaultFilters, applyFilters } from "./FilterPanel";
 import ComparisonPanel from "./ComparisonPanel";
 import ProductPreview from "./ProductPreview";
+import SearchPanel from "./SearchPanel";
+import ScoreBreakdown from "./ScoreBreakdown";
 import {
   generateMountainsFromProducts,
   generateRiverPath,
@@ -472,17 +474,24 @@ const ProductLabels = ({
   onSelect,
   sampleHeight,
   onHover,
+  highlightedIds,
+  onRightClick,
 }: {
   points: TerrainPoint[];
   onSelect: (point: TerrainPoint) => void;
   sampleHeight: HeightSampler;
   onHover?: (point: TerrainPoint | null, event?: React.MouseEvent) => void;
+  highlightedIds?: Set<string>;
+  onRightClick?: (point: TerrainPoint, event: React.MouseEvent) => void;
 }) => (
   <group>
-    {points.map((point) => {
+    {points.map((point, index) => {
       const terrainHeight = sampleHeight(point.position[0], point.position[2]);
       const y = Math.max(terrainHeight, point.height) + 1.2;
       const matchScore = Math.round((point.score ?? 0) * 100);
+      const isHighlighted = highlightedIds?.has(point.id);
+      const isTopProduct = index < 3; // Top 3 products get special treatment
+      
       return (
         <Billboard
           key={`label-${point.id}`}
@@ -491,14 +500,22 @@ const ProductLabels = ({
         >
           <Html center transform distanceFactor={8} style={{ pointerEvents: "auto" }}>
             <div
-              className="product-label"
+              className={`product-label ${isHighlighted ? 'highlighted' : ''} ${isTopProduct ? 'top-product' : ''}`}
+              data-rank={index + 1}
+              style={{ animationDelay: `${index * 0.05}s` }}
               onClick={(event) => {
                 event.stopPropagation();
                 onSelect(point);
               }}
               onMouseEnter={(event) => onHover?.(point, event)}
               onMouseLeave={() => onHover?.(null)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onRightClick?.(point, event);
+              }}
             >
+              {isTopProduct && <span className="rank-badge">#{index + 1}</span>}
               <span className="product-name">{truncateLabel(point.name)}</span>
               <span className="product-score">{matchScore}</span>
             </div>
@@ -552,14 +569,58 @@ const LowPolyTree = ({
   </group>
 );
 
-// Forest decoration - places trees around the terrain
-const ForestDecoration = ({ bounds, seed }: { bounds: TerrainBounds; seed: number }) => {
-  const trees = useMemo(() => {
+// Bush component for ground cover
+const Bush = ({ position, scale = 1, color = "#2E8B57" }: { 
+  position: [number, number, number]; 
+  scale?: number;
+  color?: string;
+}) => (
+  <group position={position} scale={scale}>
+    <mesh position={[0, 0.2, 0]}>
+      <sphereGeometry args={[0.3, 8, 8]} />
+      <meshStandardMaterial color={color} />
+    </mesh>
+    <mesh position={[0.2, 0.15, 0.1]}>
+      <sphereGeometry args={[0.2, 8, 8]} />
+      <meshStandardMaterial color={color} />
+    </mesh>
+    <mesh position={[-0.15, 0.18, -0.1]}>
+      <sphereGeometry args={[0.22, 8, 8]} />
+      <meshStandardMaterial color={color} />
+    </mesh>
+  </group>
+);
+
+// Rock component for terrain detail
+const Rock = ({ position, scale = 1 }: { 
+  position: [number, number, number]; 
+  scale?: number;
+}) => (
+  <group position={position} scale={scale}>
+    <mesh rotation={[Math.random() * 0.5, Math.random() * Math.PI, 0]}>
+      <dodecahedronGeometry args={[0.3, 0]} />
+      <meshStandardMaterial color="#7f8c8d" roughness={0.9} />
+    </mesh>
+  </group>
+);
+
+// Forest decoration - places trees, bushes, and rocks around the terrain
+const ForestDecoration = ({ 
+  bounds, 
+  seed,
+  sampleHeight 
+}: { 
+  bounds: TerrainBounds; 
+  seed: number;
+  sampleHeight?: HeightSampler;
+}) => {
+  const decorations = useMemo(() => {
     const treeList: Array<{
       id: string;
       position: [number, number, number];
       scale: number;
       color: string;
+      type: 'tree' | 'bush' | 'rock';
     }> = [];
     
     const rand = mulberry32(seed + 999);
@@ -574,58 +635,184 @@ const ForestDecoration = ({ bounds, seed }: { bounds: TerrainBounds; seed: numbe
       "#2E8B57", // Sea green
       "#006400", // Dark green
       "#32CD32", // Lime green
-      "#FF8C00", // Autumn orange
-      "#DC143C", // Autumn red
+      "#1a5f1a", // Deep forest
+      "#3a9a3a", // Medium green
     ];
     
-    // Generate 40-60 trees
-    const numTrees = 40 + Math.floor(rand() * 20);
+    const autumnColors = [
+      "#FF8C00", // Autumn orange
+      "#DC143C", // Autumn red
+      "#DAA520", // Golden
+      "#CD853F", // Peru
+    ];
+    
+    const bushColors = [
+      "#228B22",
+      "#2E8B57", 
+      "#3CB371",
+      "#556B2F",
+    ];
+    
+    // Generate 120-160 trees (more dense forest)
+    const numTrees = 120 + Math.floor(rand() * 40);
+    
+    // Generate trees in clusters for more natural look
+    const numClusters = 8 + Math.floor(rand() * 4);
+    const clusterCenters: Array<{ x: number; z: number; colorBias: number }> = [];
+    
+    for (let c = 0; c < numClusters; c++) {
+      const angle = (c / numClusters) * Math.PI * 2 + rand() * 0.5;
+      const dist = (0.25 + rand() * 0.5) * radius;
+      clusterCenters.push({
+        x: centerX + Math.cos(angle) * dist,
+        z: centerZ + Math.sin(angle) * dist,
+        colorBias: rand(), // Autumn or evergreen bias
+      });
+    }
     
     for (let i = 0; i < numTrees; i++) {
-      // Random position within terrain bounds (polar coordinates for circular distribution)
-      const angle = rand() * Math.PI * 2;
-      const dist = (0.2 + rand() * 0.7) * radius; // 20-90% of radius
+      // Pick a cluster to spawn near
+      const cluster = clusterCenters[Math.floor(rand() * clusterCenters.length)];
+      const clusterSpread = 8 + rand() * 12;
       
-      const x = centerX + Math.cos(angle) * dist;
-      const z = centerZ + Math.sin(angle) * dist;
+      const offsetAngle = rand() * Math.PI * 2;
+      const offsetDist = rand() * clusterSpread;
       
-      // Height at terrain surface (approximation - in practice would sample terrain)
-      // For now, use a simple formula
+      const x = cluster.x + Math.cos(offsetAngle) * offsetDist;
+      const z = cluster.z + Math.sin(offsetAngle) * offsetDist;
+      
       const distFromCenter = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
       const normalizedDist = distFromCenter / radius;
       
       // Trees on lower slopes (avoid peaks and water)
-      if (normalizedDist > 0.15 && normalizedDist < 0.8) {
-        const baseHeight = (1 - normalizedDist) * 8 + rand() * 2;
+      if (normalizedDist > 0.12 && normalizedDist < 0.85) {
+        // Use sampleHeight if available for accurate positioning
+        let baseHeight: number;
+        if (sampleHeight) {
+          baseHeight = sampleHeight(x, z);
+        } else {
+          baseHeight = (1 - normalizedDist) * 8 + rand() * 2;
+        }
         
         // Skip if would be in water
-        if (baseHeight > 0.5) {
-          const scale = 0.6 + rand() * 0.8;
-          const colorIdx = Math.floor(rand() * treeColors.length);
+        if (baseHeight > 0.8) {
+          const scale = 0.5 + rand() * 0.9;
+          
+          // Mix autumn and evergreen based on cluster bias
+          let color: string;
+          if (cluster.colorBias > 0.7 && rand() > 0.4) {
+            color = autumnColors[Math.floor(rand() * autumnColors.length)];
+          } else {
+            color = treeColors[Math.floor(rand() * treeColors.length)];
+          }
           
           treeList.push({
             id: `tree-${i}`,
             position: [x, baseHeight, z],
             scale,
-            color: treeColors[colorIdx],
+            color,
+            type: 'tree',
           });
         }
       }
     }
     
+    // Add bushes (60-80)
+    const numBushes = 60 + Math.floor(rand() * 20);
+    for (let i = 0; i < numBushes; i++) {
+      const angle = rand() * Math.PI * 2;
+      const dist = (0.15 + rand() * 0.7) * radius;
+      
+      const x = centerX + Math.cos(angle) * dist;
+      const z = centerZ + Math.sin(angle) * dist;
+      
+      const distFromCenter = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
+      const normalizedDist = distFromCenter / radius;
+      
+      if (normalizedDist > 0.1 && normalizedDist < 0.8) {
+        let baseHeight: number;
+        if (sampleHeight) {
+          baseHeight = sampleHeight(x, z);
+        } else {
+          baseHeight = (1 - normalizedDist) * 8 + rand() * 2;
+        }
+        
+        if (baseHeight > 0.5 && baseHeight < 12) {
+          treeList.push({
+            id: `bush-${i}`,
+            position: [x, baseHeight, z],
+            scale: 0.6 + rand() * 0.6,
+            color: bushColors[Math.floor(rand() * bushColors.length)],
+            type: 'bush',
+          });
+        }
+      }
+    }
+    
+    // Add rocks (30-50)
+    const numRocks = 30 + Math.floor(rand() * 20);
+    for (let i = 0; i < numRocks; i++) {
+      const angle = rand() * Math.PI * 2;
+      const dist = (0.05 + rand() * 0.9) * radius;
+      
+      const x = centerX + Math.cos(angle) * dist;
+      const z = centerZ + Math.sin(angle) * dist;
+      
+      const distFromCenter = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
+      const normalizedDist = distFromCenter / radius;
+      
+      let baseHeight: number;
+      if (sampleHeight) {
+        baseHeight = sampleHeight(x, z);
+      } else {
+        baseHeight = (1 - normalizedDist) * 8 + rand() * 2;
+      }
+      
+      if (baseHeight > 0.3) {
+        treeList.push({
+          id: `rock-${i}`,
+          position: [x, baseHeight, z],
+          scale: 0.5 + rand() * 1.5,
+          color: "#7f8c8d",
+          type: 'rock',
+        });
+      }
+    }
+    
     return treeList;
-  }, [bounds, seed]);
+  }, [bounds, seed, sampleHeight]);
   
   return (
     <group>
-      {trees.map((tree) => (
-        <LowPolyTree
-          key={tree.id}
-          position={tree.position}
-          scale={tree.scale}
-          color={tree.color}
-        />
-      ))}
+      {decorations.map((item) => {
+        if (item.type === 'tree') {
+          return (
+            <LowPolyTree
+              key={item.id}
+              position={item.position}
+              scale={item.scale}
+              color={item.color}
+            />
+          );
+        } else if (item.type === 'bush') {
+          return (
+            <Bush
+              key={item.id}
+              position={item.position}
+              scale={item.scale}
+              color={item.color}
+            />
+          );
+        } else {
+          return (
+            <Rock
+              key={item.id}
+              position={item.position}
+              scale={item.scale}
+            />
+          );
+        }
+      })}
     </group>
   );
 };
@@ -659,6 +846,9 @@ function Scene({
   onFocusComplete,
   showQueryPath,
   terrainData,
+  highlightedIds,
+  onRightClick,
+  environmentSettings,
 }: {
   payload: TerrainPayload;
   filteredPoints: TerrainPoint[];
@@ -668,6 +858,8 @@ function Scene({
   onFocusComplete?: () => void;
   showQueryPath?: boolean;
   terrainData: ReturnType<typeof useTerrainData>;
+  highlightedIds?: Set<string>;
+  onRightClick?: (point: TerrainPoint, event: React.MouseEvent) => void;
 }) {
   const bounds = useMemo(() => deriveBounds(payload), [payload]);
   const highlightPoints = useMemo(
@@ -710,12 +902,19 @@ function Scene({
       <hemisphereLight color="#87CEEB" groundColor="#228B22" intensity={0.3} />
       <SkyDecoration bounds={bounds} seed={meshSeed} />
       <TerrainSurface geometry={geometry} riverPoints={riverPoints} bounds={bounds} />
-      <ForestDecoration bounds={bounds} seed={meshSeed} />
+      <ForestDecoration bounds={bounds} seed={meshSeed} sampleHeight={sampleHeight} />
       {/* Query path showing the journey through ranked products */}
       <QueryPath points={filteredPoints} visible={showQueryPath ?? true} sampleHeight={sampleHeight} />
       <ProductMarkers points={filteredPoints} onSelect={onSelect} sampleHeight={sampleHeight} />
       <ProductBillboards points={filteredPoints} onSelect={onSelect} sampleHeight={sampleHeight} />
-      <ProductLabels points={filteredPoints} onSelect={onSelect} sampleHeight={sampleHeight} onHover={onHover} />
+      <ProductLabels 
+        points={filteredPoints} 
+        onSelect={onSelect} 
+        sampleHeight={sampleHeight} 
+        onHover={onHover}
+        highlightedIds={highlightedIds}
+        onRightClick={onRightClick}
+      />
       <HighlightMarkers points={highlightPoints} />
       <OrbitControls
         ref={orbitControlsRef as any}
@@ -783,6 +982,13 @@ const TerrainApp = (props: ComponentProps) => {
   // Preview state
   const [previewProduct, setPreviewProduct] = useState<TerrainPoint | null>(null);
   const [previewPosition, setPreviewPosition] = useState<{ x: number; y: number } | undefined>();
+
+  // Search state
+  const [searchHighlightedIds, setSearchHighlightedIds] = useState<Set<string>>(new Set());
+  
+  // Score breakdown state
+  const [scoreBreakdownProduct, setScoreBreakdownProduct] = useState<TerrainPoint | null>(null);
+  const [scoreBreakdownPosition, setScoreBreakdownPosition] = useState<{ x: number; y: number } | undefined>();
 
   // Apply filters to get visible points
   const filteredPoints = useMemo(() => {
@@ -889,6 +1095,24 @@ const TerrainApp = (props: ComponentProps) => {
     }
   }, []);
 
+  // Handle right-click for score breakdown
+  const handleProductRightClick = useCallback((point: TerrainPoint, event: React.MouseEvent) => {
+    setScoreBreakdownProduct(point);
+    setScoreBreakdownPosition({ x: event.clientX, y: event.clientY });
+  }, []);
+
+  // Handle search results
+  const handleSearchResult = useCallback((ids: Set<string>) => {
+    setSearchHighlightedIds(ids);
+  }, []);
+
+  // Handle search focus (camera moves to product)
+  const handleSearchFocus = useCallback((point: TerrainPoint) => {
+    const terrainHeight = sampleHeight(point.position[0], point.position[2]);
+    const y = Math.max(terrainHeight, point.height);
+    setFocusPosition([point.position[0], y, point.position[2]]);
+  }, [sampleHeight]);
+
   // Comparison handlers
   const handleAddToComparison = useCallback((point: TerrainPoint) => {
     setComparisonProducts((prev) => {
@@ -965,9 +1189,19 @@ const TerrainApp = (props: ComponentProps) => {
         onFocusComplete={handleFocusComplete}
         showQueryPath={true}
         terrainData={terrainData}
+        highlightedIds={searchHighlightedIds}
+        onRightClick={handleProductRightClick}
       />
       <NarrationPanel payload={payload} />
       <ControlIndicators visible={!tourActive} />
+      
+      {/* Search Panel */}
+      <SearchPanel
+        points={filteredPoints}
+        onSearchResult={handleSearchResult}
+        onFocusProduct={handleSearchFocus}
+        visible={!tourActive}
+      />
       
       {/* Filter Panel */}
       <FilterPanel
@@ -982,6 +1216,16 @@ const TerrainApp = (props: ComponentProps) => {
         product={previewProduct}
         position={previewPosition}
         onClose={() => setPreviewProduct(null)}
+      />
+      
+      {/* Score Breakdown on right-click */}
+      <ScoreBreakdown
+        product={scoreBreakdownProduct}
+        position={scoreBreakdownPosition}
+        onClose={() => {
+          setScoreBreakdownProduct(null);
+          setScoreBreakdownPosition(undefined);
+        }}
       />
       
       {/* Comparison Panel */}
