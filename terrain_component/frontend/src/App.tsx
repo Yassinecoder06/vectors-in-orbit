@@ -697,7 +697,7 @@ const ProductLabels = ({
           <Html 
             center 
             transform 
-            distanceFactor={8} 
+            distanceFactor={18} 
             style={{ pointerEvents: "auto" }}
             zIndexRange={[0, 50]}
           >
