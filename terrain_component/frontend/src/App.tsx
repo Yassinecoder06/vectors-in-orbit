@@ -1,4 +1,4 @@
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Stars, Billboard, useTexture, Html, Line, Cloud, Sky } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
@@ -114,6 +114,188 @@ const SkyDecoration = ({ bounds, seed }: { bounds: TerrainBounds; seed: number }
           key={cloud.id}
           position={cloud.position}
           scale={cloud.scale}
+        />
+      ))}
+    </group>
+  );
+};
+
+// Hot air balloon component
+const HotAirBalloon = ({ 
+  color = "#E74C3C",
+  stripeColor = "#F1C40F",
+  basketColor = "#8B4513",
+  scale = 1
+}: { 
+  color?: string;
+  stripeColor?: string;
+  basketColor?: string;
+  scale?: number;
+}) => (
+  <group scale={scale}>
+    {/* Balloon envelope (main balloon) */}
+    <mesh position={[0, 2.5, 0]}>
+      <sphereGeometry args={[1.8, 16, 16]} />
+      <meshStandardMaterial color={color} />
+    </mesh>
+    {/* Decorative stripes */}
+    <mesh position={[0, 2.5, 0]} rotation={[0, 0, 0]}>
+      <torusGeometry args={[1.5, 0.15, 8, 24]} />
+      <meshStandardMaterial color={stripeColor} />
+    </mesh>
+    <mesh position={[0, 2.9, 0]} rotation={[Math.PI / 2, 0, 0]}>
+      <torusGeometry args={[1.2, 0.12, 8, 24]} />
+      <meshStandardMaterial color={stripeColor} />
+    </mesh>
+    <mesh position={[0, 2.1, 0]} rotation={[Math.PI / 2, 0, 0]}>
+      <torusGeometry args={[1.4, 0.12, 8, 24]} />
+      <meshStandardMaterial color={stripeColor} />
+    </mesh>
+    {/* Bottom cone of balloon */}
+    <mesh position={[0, 0.8, 0]} rotation={[Math.PI, 0, 0]}>
+      <coneGeometry args={[0.8, 1.2, 12]} />
+      <meshStandardMaterial color={color} />
+    </mesh>
+    {/* Ropes */}
+    <mesh position={[0.3, 0, 0.3]}>
+      <cylinderGeometry args={[0.02, 0.02, 1.2, 4]} />
+      <meshStandardMaterial color="#5D4E37" />
+    </mesh>
+    <mesh position={[-0.3, 0, 0.3]}>
+      <cylinderGeometry args={[0.02, 0.02, 1.2, 4]} />
+      <meshStandardMaterial color="#5D4E37" />
+    </mesh>
+    <mesh position={[0.3, 0, -0.3]}>
+      <cylinderGeometry args={[0.02, 0.02, 1.2, 4]} />
+      <meshStandardMaterial color="#5D4E37" />
+    </mesh>
+    <mesh position={[-0.3, 0, -0.3]}>
+      <cylinderGeometry args={[0.02, 0.02, 1.2, 4]} />
+      <meshStandardMaterial color="#5D4E37" />
+    </mesh>
+    {/* Basket */}
+    <mesh position={[0, -0.7, 0]}>
+      <boxGeometry args={[0.6, 0.4, 0.6]} />
+      <meshStandardMaterial color={basketColor} />
+    </mesh>
+    {/* Basket rim */}
+    <mesh position={[0, -0.45, 0]}>
+      <boxGeometry args={[0.7, 0.08, 0.7]} />
+      <meshStandardMaterial color={basketColor} />
+    </mesh>
+  </group>
+);
+
+// Animated hot air balloon that orbits around
+const OrbitingBalloon = ({ 
+  centerX, 
+  centerZ, 
+  orbitRadius, 
+  height, 
+  speed, 
+  startAngle,
+  color,
+  stripeColor,
+  scale
+}: { 
+  centerX: number;
+  centerZ: number;
+  orbitRadius: number;
+  height: number;
+  speed: number;
+  startAngle: number;
+  color: string;
+  stripeColor: string;
+  scale: number;
+}) => {
+  const groupRef = useRef<THREE.Group>(null);
+  
+  useFrame(({ clock }) => {
+    if (!groupRef.current) return;
+    
+    const elapsed = clock.getElapsedTime();
+    const angle = startAngle + elapsed * speed;
+    
+    // Orbit around center
+    groupRef.current.position.x = centerX + Math.cos(angle) * orbitRadius;
+    groupRef.current.position.z = centerZ + Math.sin(angle) * orbitRadius;
+    
+    // Gentle bobbing up and down
+    groupRef.current.position.y = height + Math.sin(elapsed * 0.5 + startAngle) * 1.5;
+    
+    // Slight rotation to face direction of travel
+    groupRef.current.rotation.y = -angle + Math.PI / 2;
+  });
+  
+  return (
+    <group ref={groupRef}>
+      <HotAirBalloon color={color} stripeColor={stripeColor} scale={scale} />
+    </group>
+  );
+};
+
+// Container for multiple hot air balloons
+const HotAirBalloons = ({ bounds, seed }: { bounds: TerrainBounds; seed: number }) => {
+  const balloons = useMemo(() => {
+    const rand = mulberry32(seed + 555);
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+    const spread = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ);
+    
+    const balloonColors = [
+      { color: "#E74C3C", stripe: "#F1C40F" }, // Red with yellow
+      { color: "#3498DB", stripe: "#ECF0F1" }, // Blue with white
+      { color: "#9B59B6", stripe: "#F39C12" }, // Purple with orange
+      { color: "#2ECC71", stripe: "#E74C3C" }, // Green with red
+      { color: "#F39C12", stripe: "#8E44AD" }, // Orange with purple
+      { color: "#1ABC9C", stripe: "#E67E22" }, // Teal with orange
+    ];
+    
+    const list: Array<{
+      id: string;
+      orbitRadius: number;
+      height: number;
+      speed: number;
+      startAngle: number;
+      color: string;
+      stripeColor: string;
+      scale: number;
+    }> = [];
+    
+    // Generate 4-6 balloons
+    const numBalloons = 1 + Math.floor(rand() * 3);
+    
+    for (let i = 0; i < numBalloons; i++) {
+      const colorPair = balloonColors[Math.floor(rand() * balloonColors.length)];
+      list.push({
+        id: `balloon-${i}`,
+        orbitRadius: spread * 0.25 + rand() * spread * 0.3,
+        height: 25 + rand() * 20,
+        speed: 0.03 + rand() * 0.04, // Slow rotation speed
+        startAngle: (i / numBalloons) * Math.PI * 2 + rand() * 0.5,
+        color: colorPair.color,
+        stripeColor: colorPair.stripe,
+        scale: 1.5 + rand() * 1.0,
+      });
+    }
+    
+    return { list, centerX, centerZ };
+  }, [bounds, seed]);
+  
+  return (
+    <group>
+      {balloons.list.map((balloon) => (
+        <OrbitingBalloon
+          key={balloon.id}
+          centerX={balloons.centerX}
+          centerZ={balloons.centerZ}
+          orbitRadius={balloon.orbitRadius}
+          height={balloon.height}
+          speed={balloon.speed}
+          startAngle={balloon.startAngle}
+          color={balloon.color}
+          stripeColor={balloon.stripeColor}
+          scale={balloon.scale}
         />
       ))}
     </group>
@@ -603,6 +785,60 @@ const Bush = ({ position, scale = 1, color = "#2E8B57" }: {
   </group>
 );
 
+// Optimized instanced grass - renders thousands of grass blades in a single draw call
+const InstancedGrass = ({ 
+  positions 
+}: { 
+  positions: Array<{ position: [number, number, number]; scale: number; color: string }>;
+}) => {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  
+  // Create geometry once
+  const geometry = useMemo(() => new THREE.ConeGeometry(0.025, 0.4, 4), []);
+  const material = useMemo(() => new THREE.MeshStandardMaterial({ 
+    color: "#4CAF50", 
+    side: THREE.DoubleSide,
+    vertexColors: true,
+  }), []);
+  
+  useEffect(() => {
+    if (!meshRef.current) return;
+    
+    const colorArray = new Float32Array(positions.length * 3);
+    const color = new THREE.Color();
+    
+    positions.forEach((item, i) => {
+      // Position and scale
+      dummy.position.set(item.position[0], item.position[1] + 0.18 * item.scale, item.position[2]);
+      dummy.scale.setScalar(item.scale);
+      // Random rotation for variety
+      dummy.rotation.set(
+        (Math.random() - 0.5) * 0.3,
+        Math.random() * Math.PI * 2,
+        (Math.random() - 0.5) * 0.2
+      );
+      dummy.updateMatrix();
+      meshRef.current!.setMatrixAt(i, dummy.matrix);
+      
+      // Color
+      color.set(item.color);
+      colorArray[i * 3] = color.r;
+      colorArray[i * 3 + 1] = color.g;
+      colorArray[i * 3 + 2] = color.b;
+    });
+    
+    meshRef.current.instanceMatrix.needsUpdate = true;
+    
+    // Set instance colors
+    meshRef.current.instanceColor = new THREE.InstancedBufferAttribute(colorArray, 3);
+  }, [positions, dummy]);
+  
+  return (
+    <instancedMesh ref={meshRef} args={[geometry, material, positions.length]} />
+  );
+};
+
 // Rock component for terrain detail
 const Rock = ({ position, scale = 1 }: { 
   position: [number, number, number]; 
@@ -739,7 +975,7 @@ const ForestDecoration = ({
       position: [number, number, number];
       scale: number;
       color: string;
-      type: 'tree' | 'bush' | 'rock' | 'house';
+      type: 'tree' | 'bush' | 'rock' | 'house' | 'grass';
       rotation?: number;
     }> = [];
     
@@ -941,12 +1177,72 @@ const ForestDecoration = ({
       }
     }
     
+    // Add LOTS of grass tufts across all green terrain (600-800)
+    const grassColors = [
+      "#4CAF50", // Medium green
+      "#66BB6A", // Light green  
+      "#43A047", // Darker green
+      "#81C784", // Pale green
+      "#2E7D32", // Forest green
+      "#388E3C", // Green
+      "#8BC34A", // Light lime
+      "#689F38", // Olive green
+    ];
+    
+    // DOUBLED: 1200-1600 grass blades for dense coverage
+    const numGrass = 1200 + Math.floor(rand() * 400);
+    for (let i = 0; i < numGrass; i++) {
+      const angle = rand() * Math.PI * 2;
+      const dist = (0.02 + rand() * 0.88) * radius; // Wider coverage
+      
+      const x = centerX + Math.cos(angle) * dist;
+      const z = centerZ + Math.sin(angle) * dist;
+      
+      const distFromCenter = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
+      const normalizedDist = distFromCenter / radius;
+      
+      if (normalizedDist > 0.01 && normalizedDist < 0.9) {
+        let baseHeight: number;
+        if (sampleHeight) {
+          baseHeight = sampleHeight(x, z);
+        } else {
+          baseHeight = (1 - normalizedDist) * 8 + rand() * 2;
+        }
+        
+        // Grass on all terrain above water (height > 0.1), not on snowy peaks (< 12)
+        if (baseHeight > 0.1 && baseHeight < 12) {
+          treeList.push({
+            id: `grass-${i}`,
+            position: [x, baseHeight, z],
+            scale: 0.5 + rand() * 1.2,
+            color: grassColors[Math.floor(rand() * grassColors.length)],
+            type: 'grass',
+          });
+        }
+      }
+    }
+    
     return treeList;
   }, [bounds, seed, sampleHeight]);
   
+  // Separate grass items for instanced rendering
+  const grassItems = useMemo(() => 
+    decorations.filter(item => item.type === 'grass'),
+    [decorations]
+  );
+  
+  const nonGrassItems = useMemo(() => 
+    decorations.filter(item => item.type !== 'grass'),
+    [decorations]
+  );
+  
   return (
     <group>
-      {decorations.map((item) => {
+      {/* Optimized instanced grass rendering */}
+      {grassItems.length > 0 && <InstancedGrass positions={grassItems} />}
+      
+      {/* Other decorations rendered normally */}
+      {nonGrassItems.map((item) => {
         if (item.type === 'tree') {
           return (
             <LowPolyTree
@@ -1077,6 +1373,9 @@ function Scene({
       
       {/* Ocean rim around the circular terrain */}
       <OceanRim bounds={bounds} terrainRadius={terrainSize / 2} />
+      
+      {/* Hot air balloons orbiting around the mountains */}
+      <HotAirBalloons bounds={bounds} seed={meshSeed} />
       
       <SkyDecoration bounds={bounds} seed={meshSeed} />
       <TerrainSurface geometry={geometry} riverPoints={riverPoints} bounds={bounds} />
