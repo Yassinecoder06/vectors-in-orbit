@@ -47,15 +47,20 @@ def compute_financial_alignment(ratio_a: Optional[float], ratio_b: Optional[floa
 
 def build_user_interaction_profile(client: QdrantClient, user_id: str, limit: int = 200) -> Optional[Dict[str, Any]]:
     """Builds a weighted interaction vector and affordability baseline for a user."""
-    interactions, _ = client.scroll(
-        collection_name=INTERACTIONS_COLLECTION,
-        scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
-        ),
-        limit=limit,
-        with_vectors=True,
-        with_payload=True,
-    )
+    try:
+        interactions, _ = client.scroll(
+            collection_name=INTERACTIONS_COLLECTION,
+            scroll_filter=models.Filter(
+                must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
+            ),
+            limit=limit,
+            with_vectors=True,
+            with_payload=True,
+            timeout=30,  # 30 second timeout
+        )
+    except Exception as e:
+        # Timeout or network error - return None to gracefully degrade
+        return None
 
     if not interactions:
         return None
@@ -137,16 +142,21 @@ def get_fa_cf_scores(
     if not target_vector:
         return scores
 
-    results = client.query_points(
-        collection_name=INTERACTIONS_COLLECTION,
-        query=target_vector,
-        query_filter=models.Filter(
-            must_not=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
-        ),
-        limit=search_limit,
-        with_payload=True,
-        with_vectors=False,
-    )
+    try:
+        results = client.query_points(
+            collection_name=INTERACTIONS_COLLECTION,
+            query=target_vector,
+            query_filter=models.Filter(
+                must_not=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
+            ),
+            limit=search_limit,
+            with_payload=True,
+            with_vectors=False,
+            timeout=30,  # 30 second timeout
+        )
+    except Exception as e:
+        # Timeout or network error - return zero scores to gracefully degrade
+        return scores
 
     user_hits: Dict[str, List[Dict[str, Any]]] = {}
     for hit in results.points:

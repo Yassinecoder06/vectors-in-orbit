@@ -23,8 +23,7 @@ import time
 from typing import List, Dict, Any, Optional
 
 from qdrant_client import QdrantClient, models
-from sentence_transformers import SentenceTransformer
-import torch
+
 from dotenv import load_dotenv
 import numpy as np
 from cf.fa_cf import get_fa_cf_scores
@@ -87,8 +86,7 @@ EXPECTED_VECTOR_SIZES = {
 #
 # Latency Impact: ~1500ms saved per query by avoiding model reload
 
-_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-logger.info("🚀 GPU Available: %s (Device: %s)", torch.cuda.is_available(), _DEVICE)
+
 
 class EmbeddingCache:
     """Singleton cache for the embedding model (NEVER reload on reruns)."""
@@ -103,18 +101,41 @@ class EmbeddingCache:
     def get_model(self):
         """Lazy-load model on first access, reuse thereafter."""
         if self._model is None:
+            import torch
+            from sentence_transformers import SentenceTransformer
+            
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info("🚀 GPU Available: %s (Device: %s)", torch.cuda.is_available(), self._device)
+            
             logger.info("📦 Loading SentenceTransformer (all-MiniLM-L6-v2)...")
-            self._model = SentenceTransformer("all-MiniLM-L6-v2", device=_DEVICE)
-            logger.info("✅ Model loaded on device: %s", _DEVICE)
+            self._model = SentenceTransformer("all-MiniLM-L6-v2", device=self._device)
+            logger.info("✅ Model loaded on device: %s", self._device)
         return self._model
 
+    @property
+    def device(self):
+        if self._model is None:
+            self.get_model()
+        return self._device
+
 _embedding_cache = EmbeddingCache()
-_EMBEDDING_MODEL = _embedding_cache.get_model()  # Get once at module load
+# LAZY LOAD: Don't load the model until first use
+# This prevents Streamlit from freezing on startup
+_EMBEDDING_MODEL = None
+
+
+def _get_embedding_model():
+    """Lazy-load the embedding model on first use."""
+    global _EMBEDDING_MODEL
+    if _EMBEDDING_MODEL is None:
+        _EMBEDDING_MODEL = _embedding_cache.get_model()
+    return _EMBEDDING_MODEL
 
 
 def get_qdrant_client() -> QdrantClient:
     """
     Initialize Qdrant client from environment variables.
+    Includes timeout configuration for cloud deployments.
     """
     qdrant_url = os.environ.get("QDRANT_URL")
     qdrant_api_key = os.environ.get("QDRANT_API_KEY")
@@ -123,7 +144,11 @@ def get_qdrant_client() -> QdrantClient:
         logger.error("QDRANT_URL and QDRANT_API_KEY must be set.")
         raise EnvironmentError("Missing QDRANT_URL or QDRANT_API_KEY")
 
-    return QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+    return QdrantClient(
+        url=qdrant_url,
+        api_key=qdrant_api_key,
+        timeout=60,  # 60 second timeout for cloud operations
+    )
 
 
 def embed_query(text: str, batch_size: int = 32) -> List[float]:
@@ -145,12 +170,14 @@ def embed_query(text: str, batch_size: int = 32) -> List[float]:
     Raises:
         ValueError: If embedding dimension is incorrect
     """
-    logger.info("⚡ Embedding query (GPU: %s)", _DEVICE == "cuda")
+    # logger.info("⚡ Embedding query (GPU: %s)", _DEVICE == "cuda") # Moved inside try block to access device lazily
     try:
-        embedding = _EMBEDDING_MODEL.encode(
+        model = _get_embedding_model()  # Lazy-load on first use
+        device = _embedding_cache.device
+        embedding = model.encode(
             text, 
             convert_to_numpy=True, 
-            device=_DEVICE,
+            device=device,
             show_progress_bar=False  # Prevent progress bar noise in logs
         )
         vec_list = embedding.tolist()
@@ -537,15 +564,20 @@ def rerank_products(
         affordable = affordability_score > 0.0
 
         # ============ FAST SIGNAL 2: Preference ============
-        # (~5ms) Brand/category matching
+        # (~5ms) Brand/category matching with substring matching
         categories = payload.get("categories", [])
         if not isinstance(categories, list):
             categories = [categories] if categories else []
-        normalized_categories = {_normalize_text(c) for c in categories}
+        normalized_categories = [_normalize_text(c) for c in categories]
         brand = _normalize_text(payload.get("brand"))
         
-        category_match = any(c in preferred_categories for c in normalized_categories)
-        brand_match = brand in preferred_brands
+        # Bidirectional substring matching for categories
+        category_match = any(
+            any(pref in cat or cat in pref for pref in preferred_categories)
+            for cat in normalized_categories
+        )
+        # Bidirectional substring matching for brands
+        brand_match = any(pref in brand or brand in pref for pref in preferred_brands)
 
         if not preferred_categories and not preferred_brands:
             preference_score = 1.0  # No penalty if user did not specify preferences

@@ -11,24 +11,67 @@ Architecture:
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import json
 import time
+import random
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 
+# Import Swipe Component
+from streamlit_swipecards import streamlit_swipecards
+
 # Import backend search function
 from search_pipeline import search_products, get_qdrant_client, PRODUCTS_COLLECTION
 from interaction_logger import log_interaction, get_interaction_stats_by_type
 
-# Import visualization functions
+# Import terrain component
+from terrain_component import terrain_canvas
+
+# Import financial visualization functions
 from financial_semantic_viz import (
-    project_embeddings_umap,
-    visualize_financial_landscape,
     determine_safety_colors,
-    export_products_for_visualization
+    build_search_result_terrain_payload,
 )
+
+# =============================================================================
+# Image URL Helper
+# =============================================================================
+
+PLACEHOLDER_IMAGE = "https://via.placeholder.com/400x400?text=No+Image"
+
+def normalize_image_url(url: str) -> str:
+    """
+    Normalize an image URL with fallback to placeholder.
+    
+    Handles:
+    - None/empty values
+    - Whitespace stripping
+    - Protocol-relative URLs (//example.com)
+    - Invalid schemes
+    
+    Returns a valid image URL or placeholder.
+    """
+    if not url:
+        return PLACEHOLDER_IMAGE
+    
+    url = str(url).strip()
+    
+    if not url:
+        return PLACEHOLDER_IMAGE
+    
+    # Handle protocol-relative URLs
+    if url.startswith("//"):
+        url = "https:" + url
+    
+    # Validate URL scheme
+    if not url.startswith(("http://", "https://", "data:")):
+        return PLACEHOLDER_IMAGE
+    
+    return url
+
 
 # =============================================================================
 # Interaction Hooks
@@ -91,9 +134,10 @@ def on_add_to_cart(product: Dict[str, Any], query: str = ""):
             user_context=user_context,
             query=query
         )
-        st.toast("✅ Added to cart!", icon="🛒")
-    except Exception as e:
-        st.warning(f"Failed to log add to cart: {e}")
+    except Exception:
+        pass  # Silent fail - don't disrupt UX with logging errors
+    
+    st.toast("✅ Added to cart!", icon="🛒")
 
 
 def on_purchase(product: Dict[str, Any], query: str = ""):
@@ -107,9 +151,150 @@ def on_purchase(product: Dict[str, Any], query: str = ""):
             user_context=user_context,
             query=query
         )
-        st.toast("✅ Purchase logged! Thank you!", icon="💳")
+    except Exception:
+        pass  # Silent fail - don't disrupt UX with logging errors
+    
+    st.toast("✅ Purchase logged! Thank you!", icon="💳")
+
+
+def _build_product_payload_full(product: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a complete product payload for interaction logging (handles both formats)."""
+    payload = product.get("payload", {}).copy()
+    if "id" not in payload and "product_id" not in payload:
+        product_id = product.get("id")
+        if product_id:
+            payload["id"] = product_id
+    return payload
+
+
+def load_discovery_queue():
+    """Fetch a batch of products from the backend based on current filters."""
+    user_context = build_user_context()
+    query = st.session_state.search_query
+    
+    if not query:
+        query = "trending"
+
+    try:
+        results = search_products(
+            user_id=user_context["user_id"],
+            query=query,
+            top_k=30,  # Fetch 30 for the swipe stack
+            debug_mode=False,
+            override_context=user_context,
+        )
     except Exception as e:
-        st.warning(f"Failed to log purchase: {e}")
+        st.error(f"Search error: {e}")
+        results = []
+    
+    # Filter out duplicates (already in cart)
+    cart_ids = {p.get("id") or p.get("payload", {}).get("product_id") for p in st.session_state.cart}
+    
+    new_items = []
+    for item in results:
+        it_id = item.get("id") or item.get("payload", {}).get("product_id")
+        if it_id not in cart_ids:
+            new_items.append(item)
+            
+    st.session_state.discovery_queue = new_items
+    st.session_state.current_index = 0
+    st.session_state.last_queue_query = query
+
+
+def process_swipe_result(result, product: Dict[str, Any]):
+    """Process the swipe result (right = like, left = pass).
+    
+    The streamlit_swipecards component returns a dict with:
+    - lastAction: {action: 'left'|'right'|'back', cardIndex: int}
+    - swipedCards: [{index: int, action: str}, ...]
+    - totalSwiped: int
+    - remainingCards: int
+    """
+    user_context = build_user_context()
+    
+    # Debug: show in sidebar what we received
+    if "debug_swipe" not in st.session_state:
+        st.session_state.debug_swipe = []
+    st.session_state.debug_swipe.append(f"Result: {result}")
+    st.session_state.debug_swipe = st.session_state.debug_swipe[-5:]
+
+    action = None
+    
+    # The component returns action nested in lastAction
+    if isinstance(result, dict):
+        # Primary: get action from lastAction.action
+        last_action = result.get("lastAction")
+        if isinstance(last_action, dict):
+            action = last_action.get("action")
+        
+        # Fallback to top-level action key
+        if action is None:
+            action = result.get("action")
+        
+        # Fallback to other possible keys
+        if action is None:
+            action = (
+                result.get("direction")
+                or result.get("swipe")
+                or result.get("decision")
+            )
+    elif isinstance(result, str):
+        action = result
+    elif isinstance(result, bool):
+        action = "right" if result else "left"
+
+    # Normalize action values
+    if isinstance(action, str):
+        action = action.lower().strip()
+        if action in {"like", "swiperight", "right", "r", "yes", "true"}:
+            action = "right"
+        elif action in {"dislike", "swipeleft", "left", "l", "no", "false", "pass", "skip"}:
+            action = "left"
+        elif action == "back":
+            action = "back"
+    
+    st.session_state.debug_swipe.append(f"Action: {action}")
+    
+    if action == "right":
+        if "cart" not in st.session_state:
+            st.session_state.cart = []
+
+        # Add to cart
+        st.session_state.cart.append(product)
+        st.session_state.debug_swipe.append(f"✅ Added! Cart: {len(st.session_state.cart)}")
+        
+        try:
+            log_interaction(
+                user_id=user_context["user_id"],
+                product_payload=_build_product_payload_full(product),
+                interaction_type="add_to_cart",
+                user_context=user_context,
+                query=st.session_state.search_query
+            )
+        except Exception:
+            pass
+        st.toast("✅ Added to cart!", icon="🛒")
+        
+    elif action == "left":
+        st.session_state.debug_swipe.append("⏭️ Skipped")
+        try:
+            log_interaction(
+                user_id=user_context["user_id"],
+                product_payload=_build_product_payload_full(product),
+                interaction_type="view",
+                user_context=user_context,
+                query=st.session_state.search_query
+            )
+        except Exception:
+            pass
+            
+    elif action == "back":
+        st.session_state.debug_swipe.append("⬅️ Back pressed")
+        
+    else:
+        st.session_state.debug_swipe.append(f"⚠️ Unknown: {action}")
+    
+    st.session_state.interaction_count += 1
 
 # =============================================================================
 # Configuration
@@ -122,12 +307,248 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown("""
+<style>
+    /* Global dark theme with white text */
+    .stApp {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    }
+    
+    /* Make all text white/light for better contrast */
+    .stApp, .stApp p, .stApp span, .stApp label, .stApp div {
+        color: #ffffff !important;
+    }
+    
+    /* Headers styling */
+    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+        color: #ffffff !important;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+    
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        border-right: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    [data-testid="stSidebar"] * {
+        color: #e0e0e0 !important;
+    }
+    
+    /* Card-like containers */
+    [data-testid="stExpander"] {
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+    }
+    
+    /* Metric styling */
+    [data-testid="stMetric"] {
+        background: rgba(255,255,255,0.08);
+        padding: 1rem;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    [data-testid="stMetricValue"] {
+        color: #00d4ff !important;
+        font-weight: bold;
+        text-shadow: 0 0 10px rgba(0,212,255,0.3);
+    }
+    
+    /* Button styling */
+    .stButton > button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white !important;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(102,126,234,0.4);
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(102,126,234,0.6);
+    }
+    
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        box-shadow: 0 4px 15px rgba(56,239,125,0.4);
+    }
+    
+    /* Info/Warning boxes */
+    .stAlert {
+        background: rgba(255,255,255,0.1) !important;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 10px;
+    }
+    
+    /* Input fields */
+    .stTextInput input, .stSelectbox select, .stMultiSelect {
+        background: rgba(255,255,255,0.1) !important;
+        border: 1px solid rgba(255,255,255,0.2) !important;
+        color: white !important;
+        border-radius: 8px;
+    }
+    
+    .swipe-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin-top: 2rem;
+    }
+    
+    /* Style for all Streamlit images to fit properly */
+    [data-testid="stImage"] {
+        display: flex;
+        justify-content: center;
+    }
+    
+    [data-testid="stImage"] img {
+        object-fit: contain;
+        border-radius: 12px;
+        max-height: 300px;
+        width: 100%;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    
+    /* Specific styling for cart thumbnails */
+    .element-container [data-testid="stImage"] img {
+        object-fit: cover;
+        border-radius: 12px;
+        max-width: 100%;
+        height: auto;
+    }
+    
+    /* Make swipe cards adjust to content and center */
+    iframe[title*="streamlit_swipecards"],
+    iframe[title*="swipe"],
+    .stCustomComponentV1 iframe {
+        height: 1000px !important;
+        min-height: 1000px !important;
+        width: 75% !important;
+        max-width: 75% !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        display: block !important;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    
+    /* Also target parent container */
+    .stCustomComponentV1 {
+        height: 1000px !important;
+        min-height: 1000px !important;
+    }
+    
+    /* Divider styling */
+    hr {
+        border-color: rgba(255,255,255,0.1) !important;
+    }
+    
+    /* Toast notifications */
+    .stToast {
+        background: rgba(0,0,0,0.8) !important;
+        color: white !important;
+        border-radius: 10px;
+    }
+    
+    /* Progress bars */
+    .stProgress > div > div {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    /* Captions and small text */
+    .stCaption, small, .caption {
+        color: rgba(255,255,255,0.7) !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Inject custom styles into swipe cards iframe using components.html for proper JS execution
+components.html("""
+<script>
+function styleSwipeCards() {
+    // Find parent document's iframes (go up from this component)
+    const parentDoc = window.parent.document;
+    const iframes = parentDoc.querySelectorAll('iframe[title*="streamlit_swipecards"], iframe[title*="swipe"], iframe[title*="component"]');
+    iframes.forEach(iframe => {
+        try {
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            if (doc && doc.body) {
+                let style = doc.getElementById('custom-swipe-style');
+                if (!style) {
+                    style = doc.createElement('style');
+                    style.id = 'custom-swipe-style';
+                    style.textContent = `
+                        body, html {
+                            background: linear-gradient(135deg, #1e1e2f 0%, #2d2d44 100%) !important;
+                        }
+                        * {
+                            color: #ffffff !important;
+                        }
+                        h1, h2, h3, h4, h5, h6 {
+                            color: #ffffff !important;
+                            text-align: center !important;
+                            font-size: 2.2rem !important;
+                            font-weight: 700 !important;
+                            text-shadow: 0 3px 10px rgba(0,0,0,0.6) !important;
+                            margin-bottom: 0.5rem !important;
+                        }
+                        p, span {
+                            color: #ffffff !important;
+                            text-align: center !important;
+                            font-size: 1.6rem !important;
+                            font-weight: 600 !important;
+                            text-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
+                        }
+                        [class*="title"], [class*="name"], [class*="heading"] {
+                            color: #ffffff !important;
+                            font-size: 2.2rem !important;
+                            font-weight: 700 !important;
+                            text-align: center !important;
+                            text-shadow: 0 3px 10px rgba(0,0,0,0.6) !important;
+                            letter-spacing: 0.5px !important;
+                        }
+                        [class*="description"], [class*="desc"], [class*="subtitle"], [class*="price"] {
+                            color: #00d4ff !important;
+                            font-size: 1.8rem !important;
+                            font-weight: 600 !important;
+                            text-align: center !important;
+                            text-shadow: 0 0 15px rgba(0,212,255,0.4) !important;
+                        }
+                        [class*="card"], .card {
+                            background: linear-gradient(145deg, #252540 0%, #1a1a30 100%) !important;
+                            border-radius: 20px !important;
+                            box-shadow: 0 15px 40px rgba(0,0,0,0.5) !important;
+                        }
+                        img {
+                            border-radius: 16px !important;
+                            box-shadow: 0 10px 30px rgba(0,0,0,0.4) !important;
+                        }
+                    `;
+                    doc.head.appendChild(style);
+                }
+            }
+        } catch(e) {
+            // Cross-origin restrictions may prevent styling
+        }
+    });
+}
+// Run immediately and keep polling for new iframes
+styleSwipeCards();
+setInterval(styleSwipeCards, 300);
+</script>
+""", height=0)
+
 # User personas for quick selection
 USER_PERSONAS = {
-    "Student": {"balance": 500, "credit": 1000, "risk": "Low"},
-    "Professional": {"balance": 5000, "credit": 15000, "risk": "Medium"},
-    "Executive": {"balance": 20000, "credit": 50000, "risk": "High"},
-    "Custom": {"balance": 2500, "credit": 5000, "risk": "Medium"},
+    "Student": {"balance": 500, "credit": 1000},
+    "Professional": {"balance": 5000, "credit": 15000},
+    "Executive": {"balance": 20000, "credit": 50000},
+    "Custom": {"balance": 2500, "credit": 5000},
 }
 
 
@@ -205,6 +626,7 @@ def _load_brand_category_options_from_qdrant() -> Tuple[List[str], List[str]]:
                 with_payload=True,
                 with_vectors=False,
                 offset=next_page,
+                timeout=30,  # 30 second timeout
             )
 
             if not points:
@@ -245,6 +667,18 @@ def init_session_state():
         "search_query": "",
         "search_results": [],
         "has_searched": False,
+        # Swipe specific
+        "discovery_queue": [],
+        "cart": [],
+        "liked_products": [],  # Products swiped right, pending review
+        "skipped_products": [],  # Products swiped left
+        "interaction_count": 0,
+        "view_mode": "Swipe",  # 'Swipe', 'Cart', or 'Review'
+        "current_index": 0,
+        "last_queue_query": None,
+        # 3D Terrain
+        "terrain_seed": 42,
+        "selected_terrain_product": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -269,6 +703,60 @@ def render_sidebar():
     st.sidebar.title("🎛️ User Profile")
     st.sidebar.markdown("---")
     
+    # Navigation Switch
+    st.sidebar.subheader("Navigation")
+    view_options = ["Swipe & Shop", "3D Landscape", "My Cart"]
+    current_index = 0
+    if st.session_state.view_mode == "3D":
+        current_index = 1
+    elif st.session_state.view_mode == "Cart":
+        current_index = 2
+    
+    def format_nav(x):
+        if x == "My Cart":
+            return f"🛒 Cart ({len(st.session_state.cart)})"
+        elif x == "3D Landscape":
+            return "🗺️ 3D Landscape"
+        return "🔍 Swipe & Shop"
+    
+    mode = st.sidebar.radio(
+        "View Mode",
+        view_options,
+        index=current_index,
+        format_func=format_nav
+    )
+    if mode == "Swipe & Shop":
+        st.session_state.view_mode = "Swipe"
+    elif mode == "3D Landscape":
+        st.session_state.view_mode = "3D"
+    else:
+        st.session_state.view_mode = "Cart"
+    
+    st.sidebar.markdown("---")
+
+    # Search input
+    st.sidebar.subheader("🔍 Search Products")
+    def _trigger_sidebar_search():
+        query = st.session_state.get("sidebar_search_input", "").strip()
+        st.session_state.search_query = query
+        st.session_state.discovery_queue = []
+        st.session_state.current_index = 0
+        with st.spinner("🔍 Searching..."):
+            load_discovery_queue()
+
+    st.sidebar.text_input(
+        "What are you looking for?",
+        value=st.session_state.search_query,
+        placeholder="e.g., running shoes",
+        key="sidebar_search_input",
+        label_visibility="collapsed"
+    )
+
+    if st.sidebar.button("Search", key="sidebar_search_button", type="primary", use_container_width=True):
+        _trigger_sidebar_search()
+
+    st.sidebar.markdown("---")
+
     # Load options from dataset
     brand_options, category_options = load_brand_category_options()
     
@@ -287,35 +775,28 @@ def render_sidebar():
             preset = USER_PERSONAS[persona]
             st.session_state.available_balance = float(preset["balance"])
             st.session_state.credit_limit = float(preset["credit"])
+            st.session_state.discovery_queue = [] # Reset queue on persona change
     
     st.sidebar.markdown("### 💰 Financial Context")
     
-    # Available balance slider
-    st.session_state.available_balance = st.sidebar.slider(
-        "Available Balance ($)",
+    # Available balance - direct number input
+    st.session_state.available_balance = st.sidebar.number_input(
+        "💵 Available Balance ($)",
         min_value=0,
-        max_value=50000,
+        max_value=1000000,
         value=int(st.session_state.available_balance),
         step=100,
-        help="Your current available funds",
+        help="How much money do you have right now?"
     )
     
-    # Credit limit slider
-    st.session_state.credit_limit = st.sidebar.slider(
-        "Credit Limit ($)",
+    # Credit limit - direct number input
+    st.session_state.credit_limit = st.sidebar.number_input(
+        "💳 Credit Limit ($)",
         min_value=0,
-        max_value=100000,
+        max_value=1000000,
         value=int(st.session_state.credit_limit),
-        step=500,
-        help="Your maximum credit allowance",
-    )
-    
-    # Risk tolerance selector
-    st.session_state.risk_tolerance = st.sidebar.selectbox(
-        "🎯 Risk Tolerance",
-        options=["Low", "Medium", "High"],
-        index=["Low", "Medium", "High"].index(st.session_state.risk_tolerance),
-        help="How much product price volatility or financial stretch are you comfortable with?",
+        step=100,
+        help="What's your total credit allowance?"
     )
     
     # Total budget display
@@ -345,6 +826,12 @@ def render_sidebar():
     
     # Render trending section below main sidebar
     render_trending_section()
+    
+    # Debug panel for swipe results
+    if st.session_state.get("debug_swipe"):
+        with st.sidebar.expander("🐛 Swipe Debug", expanded=False):
+            for msg in st.session_state.debug_swipe:
+                st.caption(msg)
 
 
 
@@ -462,7 +949,7 @@ def render_product_card(product: Dict[str, Any], rank: int):
         
         with col1:
             if image_url:
-                st.image(image_url, width=220)
+                st.image(image_url, width="content")
             st.markdown(f"### #{rank} {name}")
             st.caption(f"**{brand}** · {category}")
         
@@ -579,7 +1066,17 @@ def render_explanation(
         category_match = any(str(c).lower() in preferred_categories for c in categories)
         
         if brand_match and category_match:
-            matched = next((c for c in categories if str(c).lower() in preferred_categories), None)
+            # Find matched category with bidirectional substring matching
+            matched = None
+            for cat in categories:
+                cat_lower = str(cat).lower()
+                for pref in preferred_categories:
+                    pref_lower = pref.lower()
+                    if pref_lower in cat_lower or cat_lower in pref_lower:
+                        matched = cat
+                        break
+                if matched:
+                    break
             if matched:
                 st.success(f"Matches brand ({brand}) & category ({matched})")
             else:
@@ -587,7 +1084,17 @@ def render_explanation(
         elif brand_match:
             st.success(f"Matches preferred brand: {brand}")
         elif category_match:
-            matched = next((c for c in categories if str(c).lower() in preferred_categories), None)
+            # Find matched category with bidirectional substring matching
+            matched = None
+            for cat in categories:
+                cat_lower = str(cat).lower()
+                for pref in preferred_categories:
+                    pref_lower = pref.lower()
+                    if pref_lower in cat_lower or cat_lower in pref_lower:
+                        matched = cat
+                        break
+                if matched:
+                    break
             if matched:
                 st.success(f"Matches preferred category: {matched}")
             else:
@@ -595,7 +1102,12 @@ def render_explanation(
         elif not st.session_state.preferred_brands and not st.session_state.preferred_categories:
             st.info("No preferences set - all products considered equally")
         else:
-            st.warning("No preference match")
+            # Debug: show product categories when no match
+            if categories:
+                cat_str = ", ".join([str(c) for c in categories[:3]])
+                st.warning(f"No match (product cats: {cat_str})")
+            else:
+                st.warning("No preference match")
     
     with col4:
         st.markdown("**🤝 Collaborative**")
@@ -643,357 +1155,380 @@ def perform_search(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         return []
 
 
-def render_financial_landscape(user_id: str, risk_tolerance: str = "Medium", top_k: int = 50):
-    """Render the financial landscape visualization using real Qdrant data."""
-    try:
-        with st.spinner("📊 Loading financial landscape..."):
-            # Get Qdrant client
-            client = get_qdrant_client()
-            
-            # Export products for visualization with custom risk tolerance
-            products_dict = export_products_for_visualization(
-                client, 
-                user_id, 
-                top_k=top_k,
-                risk_tolerance=risk_tolerance  # Pass UI risk tolerance
-            )
-            
-            if not products_dict:
-                st.warning("No products found. Check Qdrant collections.")
-                return
-            
-            # Extract vectors and metadata
-            product_ids = list(products_dict.keys())
-            embeddings = np.array([products_dict[pid]['embedding'] for pid in product_ids])
-            
-            # Project to 2D
-            coords = project_embeddings_umap(embeddings)
-            
-            # Prepare metadata
-            finance_metadata = {
-                'prices': np.array([products_dict[pid]['price'] for pid in product_ids]),
-                'user_budgets': np.array([products_dict[pid]['user_budget'] for pid in product_ids]),
-                'risk_tolerances': np.array([products_dict[pid]['user_risk_tolerance'] for pid in product_ids]),
-                'final_scores': np.array([products_dict[pid]['final_score'] for pid in product_ids])
-            }
-            
-            # Create visualization
-            fig, ax = plt.subplots(figsize=(14, 10), facecolor='white')
-            
-            # Classify products by financial safety
-            colors = []
-            sizes = []
-            
-            for i in range(len(product_ids)):
-                price = finance_metadata['prices'][i]
-                budget = finance_metadata['user_budgets'][i]
-                tolerance = finance_metadata['risk_tolerances'][i]
-                final_score = finance_metadata['final_scores'][i]
-                
-                # Calculate metrics
-                affordability_ratio = price / budget if budget > 0 else 1.0
-                risk_safety = abs(affordability_ratio - tolerance)
-                
-                # Color assignment logic
-                if affordability_ratio < 0.7 and risk_safety < 0.2:
-                    color = '#2ecc71'  # GREEN: Safe and affordable
-                elif affordability_ratio < 0.7 and risk_safety < 0.5:
-                    color = '#f39c12'  # ORANGE: Affordable but risky
-                else:
-                    color = '#e74c3c'  # RED: Unaffordable or too risky
-                
-                colors.append(color)
-                size = 100 + (final_score * 400)
-                sizes.append(size)
-            
-            # Plot
-            ax.scatter(coords[:, 0], coords[:, 1], 
-                      c=colors, s=sizes, alpha=0.7, 
-                      edgecolors='black', linewidth=0.5)
-            
-            # Add legend
-            from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor='#2ecc71', edgecolor='black', label='Safe & Affordable (Recommended)'),
-                Patch(facecolor='#f39c12', edgecolor='black', label='Affordable but Risky (Filtered)'),
-                Patch(facecolor='#e74c3c', edgecolor='black', label='Unaffordable or Too Risky (Hidden)'),
-            ]
-            ax.legend(handles=legend_elements, loc='upper right', fontsize=11, framealpha=0.95)
-            
-            # Styling
-            ax.set_xlabel('Semantic Similarity (Dimension 1)', fontsize=12, fontweight='bold')
-            ax.set_ylabel('Semantic Similarity (Dimension 2)', fontsize=12, fontweight='bold')
-            ax.set_title('Financial Discovery Landscape', fontsize=14, fontweight='bold', pad=20)
-            ax.grid(True, alpha=0.2, linestyle='--')
-            ax.set_facecolor('#f8f9fa')
-            
-            # Display plot
-            st.pyplot(fig, use_container_width=True)
-            
-            # Display statistics
-            safety_colors = determine_safety_colors(finance_metadata)
-            green_count = np.sum(safety_colors == 'green')
-            orange_count = np.sum(safety_colors == 'orange')
-            red_count = np.sum(safety_colors == 'red')
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Safe & Affordable", f"{green_count}")
-            with col2:
-                st.metric("Risky/Stretched", f"{orange_count}")
-            with col3:
-                st.metric("Unsafe", f"{red_count}")
-            with col4:
-                avg_score = np.mean(finance_metadata['final_scores'])
-                st.metric("Avg Score", f"{avg_score:.2f}")
-            
-            # Additional metrics
-            col1, col2 = st.columns(2)
-            with col1:
-                st.info(f"**Budget:** ${finance_metadata['user_budgets'][0]:,.2f}")
-            with col2:
-                st.info(f"**Avg Product Price:** ${np.mean(finance_metadata['prices']):,.2f}")
-            
-    except Exception as e:
-        st.error(f"Error loading financial landscape: {e}")
+@st.fragment
+def render_swipe_cards():
+    """Fragment for swipe cards - tracks swipes without page reload."""
+    if not st.session_state.discovery_queue:
+        return
+    
+    # Initialize liked products tracking if not exists
+    if "liked_products" not in st.session_state:
+        st.session_state.liked_products = []
+    
+    remaining_products = st.session_state.discovery_queue
+    if not remaining_products:
+        return
+    
+    # Prepare stack cards - simplified with just name and price
+    cards = []
+    for idx, p in enumerate(remaining_products):
+        p_payload = p.get("payload", {})
+        p_name = p_payload.get("name", "Unknown")[:50]  # Truncate for compact display
+        p_price = p_payload.get("price", 0)
+        p_image = normalize_image_url(p_payload.get("image_url"))
 
-
-def render_main_area():
-    """Render main search interface and results."""
-    st.title("🛒 Context-Aware FinCommerce Engine")
-    st.markdown(
-        "Personalized product recommendations powered by **semantic search**, "
-        "**affordability scoring**, and **preference matching**."
+        cards.append({
+            "id": p.get("id") or p_payload.get("product_id") or f"idx_{idx}",
+            "name": p_name,
+            "description": f"${p_price:,.2f}",  # Plain price, no markdown
+            "image": p_image,
+        })
+    
+    # Single key for the entire session - component tracks swipes internally
+    current_key = f"swipe_session_{st.session_state.last_queue_query}"
+    
+    # Render Swipe Component - it handles all swipes internally
+    result = streamlit_swipecards(
+        cards=cards,
+        key=current_key,
+        view="desktop"
     )
     
-    # Search input section
-    col1, col2 = st.columns([4, 1])
+    # Determine current card index based on swipes
+    current_card_index = 0
+    swiped_cards = []
+    remaining_count = len(cards)
     
-    with col1:
-        query = st.text_input(
-            "🔍 What are you looking for?",
-            value=st.session_state.search_query,
-            placeholder="e.g., 'comfortable running shoes for marathon training'",
-            label_visibility="collapsed",
-        )
-    
-    with col2:
-        search_clicked = st.button("Search", type="primary", use_container_width=True)
-    
-    # Number of results selector
-    top_k = st.slider("Number of recommendations", 3, 10, 5, key="top_k_slider")
-    
-    # Execute search
-    if search_clicked and query.strip():
-        st.session_state.search_query = query
-        with st.spinner("🔍 Searching across products..."):
-            st.session_state.search_results = perform_search(query, top_k)
-            st.session_state.has_searched = True
+    # Process result - component returns all swiped cards info
+    if result and isinstance(result, dict):
+        swiped_cards = result.get("swipedCards", [])
+        remaining_count = result.get("remainingCards", len(cards))
+        current_card_index = len(swiped_cards)  # Next card after all swiped ones
+        
+        # Debug info
+        if "debug_swipe" not in st.session_state:
+            st.session_state.debug_swipe = []
+        st.session_state.debug_swipe.append(f"Swiped: {len(swiped_cards)}, Remaining: {remaining_count}")
+        st.session_state.debug_swipe = st.session_state.debug_swipe[-5:]
+        
+        # Collect all right-swiped products
+        liked_indices = [s["index"] for s in swiped_cards if s.get("action") == "right"]
+        
+        # Update liked products list
+        st.session_state.liked_products = [
+            remaining_products[i] for i in liked_indices 
+            if i < len(remaining_products)
+        ]
+        
+        # Show progress
+        if swiped_cards:
+            liked_count = len([s for s in swiped_cards if s.get("action") == "right"])
+            st.success(f"❤️ Liked: {liked_count} | ⏭️ Skipped: {len(swiped_cards) - liked_count}")
+        
+        # When all cards are swiped, show the review button
+        if remaining_count == 0:
+            if st.session_state.liked_products:
+                st.balloons()
+                st.success(f"🎉 Done! You liked {len(st.session_state.liked_products)} products!")
+                if st.button("📦 Add All to Cart", type="primary", use_container_width=True, key="add_all_to_cart"):
+                    # Add all liked products to cart
+                    if "cart" not in st.session_state:
+                        st.session_state.cart = []
+                    st.session_state.cart.extend(st.session_state.liked_products)
+                    cart_count = len(st.session_state.cart)
+                    st.session_state.liked_products = []
+                    st.session_state.discovery_queue = []
+                    st.session_state.view_mode = "Cart"
+                    st.toast(f"✅ Added {cart_count} items to cart!", icon="🛒")
+                    # Full page rerun to switch to cart view
+                    st.rerun()
+            else:
+                st.info("You didn't like any products. Try a new search!")
+
+    # Get current product based on swipe progress
+    if current_card_index < len(remaining_products):
+        product = remaining_products[current_card_index]
+        payload = product.get("payload", {})
+        
+        # Combined details and explanation section
+        with st.expander(f"🔍 View Details: {payload.get('name', 'Product')[:40]}", expanded=False):
+            on_product_click(product, st.session_state.search_query)
+            
+            st.markdown("### Product Details")
+            st.write(payload.get("description", "No description available"))
+            
+            st.markdown("### Why We Recommended This")
+            explanations = product.get("explanations", [])
+            if explanations:
+                for i, exp in enumerate(explanations, 1):
+                    st.write(f"{i}. {exp}")
+            else:
+                st.caption("No explanation available.")
+            
+            st.markdown("---")
+            
+            render_explanation(
+                product.get("semantic_score", 0.0),
+                product.get("affordability_score", 0.0),
+                product.get("preference_score", 0.0),
+                product.get("collaborative_score", 0.0),
+                product.get("popularity_score", 0.0),
+                payload,
+            )
+
+
+def render_swipe_ui():
+    """Render the Tinder-like swipe interface."""
+    st.title("🔥 Discover Products")
+    st.caption("Swipe **Right** ➡️ to Add to Cart | Swipe **Left** ⬅️ to Skip")
+
+    # Remaining counter
+    if st.session_state.discovery_queue:
+        remaining = len(st.session_state.discovery_queue)
+        st.info(f"📚 Remaining in this batch: {remaining}")
     
     st.markdown("---")
     
-    # Display results
-    if st.session_state.has_searched:
-        results = st.session_state.search_results
+    # Reload queue if empty
+    if not st.session_state.discovery_queue:
+        with st.spinner("Curating your feed..."):
+            load_discovery_queue()
+    
+    if not st.session_state.discovery_queue:
+        st.warning("No products found for your criteria. Try adjusting filters!")
+        if st.button("Reset Filters"):
+            st.session_state.preferred_brands = []
+            st.session_state.preferred_categories = []
+            st.session_state.search_query = ""
+            st.rerun()
+        return
+    
+    # Render the swipe cards fragment (reruns independently)
+    render_swipe_cards()
+
+
+def render_cart_ui():
+    """Render the shopping cart view."""
+    st.title(f"🛒 My Cart ({len(st.session_state.cart)})")
+    
+    if not st.session_state.cart:
+        st.info("Your cart is empty.")
+        if st.button("Start Swiping"):
+            st.session_state.view_mode = "Swipe"
+            st.rerun()
+        return
+
+    total = 0.0
+    items_to_delete = []
+    
+    for i, item in enumerate(st.session_state.cart):
+        payload = item.get("payload", {})
+        price = payload.get("price", 0.0)
+        total += price
         
-        if results:
-            # Create tabs for different views
-            tab1, tab2 = st.tabs(["📊 Recommendations", "🗺️ Financial Landscape"])
-            
-            with tab1:
-                st.markdown(f"### 🎁 Top {len(results)} Recommendations")
-                
-                # Summary metrics
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    avg_score = sum(r.get("final_score", 0) for r in results) / len(results)
-                    st.metric("Avg Match", f"{avg_score:.0%}")
-                with col2:
-                    avg_price = sum(r.get("payload", {}).get("price", 0) for r in results) / len(results)
-                    st.metric("Avg Price", f"${avg_price:,.0f}")
-                with col3:
-                    in_budget = sum(
-                        1 for r in results 
-                        if r.get("affordability_score", 0) >= 0.5
-                    )
-                    st.metric("In Budget", f"{in_budget}/{len(results)}")
-                with col4:
-                    pref_match = sum(
-                        1 for r in results 
-                        if r.get("preference_score", 0) >= 1.0
-                    )
-                    st.metric("Pref Match", f"{pref_match}/{len(results)}")
-                
-                st.markdown("---")
-                
-                # Render product cards
-                for idx, product in enumerate(results, start=1):
-                    render_product_card(product, idx)
-            
-            with tab2:
-                st.markdown("### 🗺️ Financial Discovery Landscape")
-                st.markdown(
-                    "Visualization of **your search results** positioned by semantic similarity. "
-                    "**Green dots** = safe & affordable. **Orange dots** = risky/stretched. "
-                    "**Red dots** = unsafe/unaffordable (filtered from recommendations)."
+        with st.container():
+            c1, c2, c3 = st.columns([1, 4, 1])
+            with c1:
+                img_url = payload.get("image_url", "")
+                if img_url:
+                    st.image(img_url, width=100)
+            with c2:
+                st.subheader(payload.get("name", "Unknown"))
+                st.caption(f"{payload.get('brand', 'N/A')} - ${price:,.2f}")
+            with c3:
+                if st.button("❌ Remove", key=f"del_{i}"):
+                    items_to_delete.append(i)
+        st.divider()
+    
+    # Delete items in reverse order to preserve indices
+    for i in reversed(items_to_delete):
+        st.session_state.cart.pop(i)
+    
+    if items_to_delete:
+        st.rerun()
+    
+    st.markdown(f"## Total: ${total:,.2f}")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("← Continue Shopping", use_container_width=True):
+            st.session_state.view_mode = "Swipe"
+            st.rerun()
+    
+    with col2:
+        if st.button("💳 Checkout", type="primary", use_container_width=True):
+            user_context = build_user_context()
+            for item in st.session_state.cart:
+                log_interaction(
+                    user_id=user_context["user_id"],
+                    product_payload=_build_product_payload_full(item),
+                    interaction_type="purchase",
+                    user_context=user_context
                 )
-                
-                # Extract metadata from search results and re-fetch vectors
-                try:
-                    if len(results) < 3:
-                        st.warning("Need at least 3 products for visualization. Try searching for more results.")
-                    else:
-                        product_ids = [r.get("id") for r in results]
-                        prices = []
-                        final_scores = []
-                        
-                        user_context = build_user_context()
-                        total_budget = user_context["available_balance"] + user_context["credit_limit"]
-                        
-                        # Map risk tolerance to numeric
-                        risk_tolerance_map = {"Low": 0.2, "Medium": 0.5, "High": 0.8}
-                        user_risk_tolerance = risk_tolerance_map.get(user_context["risk_tolerance"], 0.5)
-                        
-                        for result in results:
-                            payload = result.get("payload", {})
-                            prices.append(payload.get("price", 0.0))
-                            final_scores.append(result.get("final_score", 0.0))
-                        
-                        # Fetch vectors for these products from Qdrant
-                        with st.spinner("Fetching product embeddings..."):
-                            client = get_qdrant_client()
-                            points = client.retrieve(
-                                collection_name=PRODUCTS_COLLECTION,
-                                ids=product_ids,
-                                with_vectors=True
-                            )
-                            
-                            embeddings = []
-                            for point in points:
-                                if point.vector is not None:
-                                    embeddings.append(point.vector)
-                        
-                        if len(embeddings) > 0:
-                            embeddings_array = np.array(embeddings)
-                            
-                            # Project to 2D
-                            coords = project_embeddings_umap(embeddings_array)
-                            
-                            # Prepare metadata
-                            finance_metadata = {
-                                'prices': np.array(prices),
-                                'user_budgets': np.array([total_budget] * len(prices)),
-                                'risk_tolerances': np.array([user_risk_tolerance] * len(prices)),
-                                'final_scores': np.array(final_scores)
-                            }
-                            
-                            # Create visualization
-                            fig, ax = plt.subplots(figsize=(14, 10), facecolor='white')
-                            
-                            # Classify products by financial safety
-                            colors = []
-                            sizes = []
-                            
-                            for i in range(len(prices)):
-                                price = finance_metadata['prices'][i]
-                                budget = finance_metadata['user_budgets'][i]
-                                tolerance = finance_metadata['risk_tolerances'][i]
-                                final_score = finance_metadata['final_scores'][i]
-                                
-                                # Calculate metrics
-                                affordability_ratio = price / budget if budget > 0 else 1.0
-                                risk_safety = abs(affordability_ratio - tolerance)
-                                
-                                # Color assignment logic
-                                if affordability_ratio < 0.7 and risk_safety < 0.2:
-                                    color = '#2ecc71'  # GREEN: Safe and affordable
-                                elif affordability_ratio < 0.7 and risk_safety < 0.5:
-                                    color = '#f39c12'  # ORANGE: Affordable but risky
-                                else:
-                                    color = '#e74c3c'  # RED: Unaffordable or too risky
-                                
-                                colors.append(color)
-                                size = 100 + (final_score * 400)
-                                sizes.append(size)
-                            
-                            # Plot
-                            ax.scatter(coords[:, 0], coords[:, 1], 
-                                      c=colors, s=sizes, alpha=0.7, 
-                                      edgecolors='black', linewidth=0.5)
-                            
-                            # Add legend
-                            from matplotlib.patches import Patch
-                            legend_elements = [
-                                Patch(facecolor='#2ecc71', edgecolor='black', label='Safe & Affordable'),
-                                Patch(facecolor='#f39c12', edgecolor='black', label='Affordable but Risky'),
-                                Patch(facecolor='#e74c3c', edgecolor='black', label='Unaffordable/Too Risky'),
-                            ]
-                            ax.legend(handles=legend_elements, loc='upper right', fontsize=11, framealpha=0.95)
-                            
-                            # Styling
-                            ax.set_xlabel('Semantic Similarity (Dimension 1)', fontsize=12, fontweight='bold')
-                            ax.set_ylabel('Semantic Similarity (Dimension 2)', fontsize=12, fontweight='bold')
-                            ax.set_title(f'Financial Landscape: "{st.session_state.search_query}"', fontsize=14, fontweight='bold', pad=20)
-                            ax.grid(True, alpha=0.2, linestyle='--')
-                            ax.set_facecolor('#f8f9fa')
-                            
-                            # Display plot
-                            st.pyplot(fig, use_container_width=True)
-                            
-                            # Display statistics
-                            safety_colors = determine_safety_colors(finance_metadata)
-                            green_count = np.sum(safety_colors == 'green')
-                            orange_count = np.sum(safety_colors == 'orange')
-                            red_count = np.sum(safety_colors == 'red')
-                            
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric("🟢 Safe & Affordable", f"{green_count}")
-                            with col2:
-                                st.metric("🟠 Risky/Stretched", f"{orange_count}")
-                            with col3:
-                                st.metric("🔴 Unsafe", f"{red_count}")
-                            with col4:
-                                avg_score = np.mean(finance_metadata['final_scores'])
-                                st.metric("Avg Score", f"{avg_score:.2f}")
-                            
-                            # Additional metrics
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.info(f"**Your Budget:** ${total_budget:,.2f}")
-                            with col2:
-                                st.info(f"**Avg Product Price:** ${np.mean(finance_metadata['prices']):,.2f}")
-                        else:
-                            st.warning("No product embeddings available for visualization.")
-                        
-                except Exception as e:
-                    st.error(f"Error creating visualization: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
-        else:
-            st.info(
-                "😕 No products found matching your criteria.\n\n"
-                "Try:\n"
-                "- Broadening your search terms\n"
-                "- Increasing your budget\n"
-                "- Removing preference filters"
-            )
-    else:
-        # Welcome state
-        st.markdown(
-            """
-            ### 👋 Welcome!
+            st.session_state.cart = []
+            st.balloons()
+            st.success("🎉 Purchase Complete! Thank you!")
+            time.sleep(2)
+            st.rerun()
+
+
+def render_3d_landscape_ui():
+    """Render the 3D Terrain Landscape view."""
+    st.title("🗺️ 3D Financial Landscape")
+    st.markdown(
+        "Explore your search results in an interactive 3D landscape. "
+        "**Green markers** = safe & affordable. **Orange markers** = risky/stretched. "
+        "**Red markers** = unsafe/unaffordable."
+    )
+    
+    # Check if we have search results
+    results = st.session_state.discovery_queue
+    
+    if not results:
+        st.info("👋 No products loaded yet. Use the search in the sidebar to discover products.")
+        if st.button("Load Default Products", type="primary"):
+            with st.spinner("Loading products..."):
+                load_discovery_queue()
+            st.rerun()
+        return
+    
+    try:
+        if len(results) < 3:
+            st.warning("Need at least 3 products for visualization. Try searching for more results.")
+            return
             
-            Enter a search query above to discover personalized product recommendations.
-            
-            **How it works:**
-            1. 🔍 **Semantic Search** - We understand your intent, not just keywords
-            2. 💰 **Affordability Scoring** - Products ranked by your budget
-            3. ❤️ **Preference Matching** - Your favorite brands & categories prioritized
-            
-            Configure your profile in the sidebar to personalize results!
-            """
+        prices = []
+        final_scores = []
+        
+        user_context = build_user_context()
+        total_budget = user_context["available_balance"] + user_context["credit_limit"]
+        
+        # Map risk tolerance to numeric
+        risk_tolerance_map = {"Low": 0.2, "Medium": 0.5, "High": 0.8}
+        user_risk_tolerance = risk_tolerance_map.get(user_context["risk_tolerance"], 0.5)
+        
+        for result in results:
+            payload = result.get("payload", {})
+            prices.append(payload.get("price", 0.0))
+            final_scores.append(result.get("final_score", 0.0))
+        
+        # Prepare metadata for safety color calculation
+        finance_metadata = {
+            'prices': np.array(prices),
+            'user_budgets': np.array([total_budget] * len(prices)),
+            'risk_tolerances': np.array([user_risk_tolerance] * len(prices)),
+            'final_scores': np.array(final_scores)
+        }
+        
+        # Display safety color statistics
+        safety_colors = determine_safety_colors(finance_metadata)
+        green_count = np.sum(safety_colors == 'green')
+        orange_count = np.sum(safety_colors == 'orange')
+        red_count = np.sum(safety_colors == 'red')
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("🟢 Safe & Affordable", f"{green_count}")
+        with col2:
+            st.metric("🟠 Risky/Stretched", f"{orange_count}")
+        with col3:
+            st.metric("🔴 Unsafe", f"{red_count}")
+        with col4:
+            avg_score = np.mean(finance_metadata['final_scores'])
+            st.metric("Avg Score", f"{avg_score:.2f}")
+        
+        # Additional metrics
+        col1, col2 = st.columns(2)
+        with col1:
+            st.info(f"**Your Budget:** ${total_budget:,.2f}")
+        with col2:
+            st.info(f"**Avg Product Price:** ${np.mean(finance_metadata['prices']):,.2f}")
+
+        st.markdown("---")
+        st.markdown("#### ⚡ 3D Terrain Explorer")
+        st.caption(
+            "Interactive 3D terrain with product markers. "
+            "Use WASD keys to navigate, click products to select."
         )
+
+        toggle_col, shuffle_col = st.columns([4, 1])
+        with toggle_col:
+            show_terrain = st.toggle(
+                "Enable 3D terrain",
+                value=True,
+                key="terrain_toggle",
+            )
+        with shuffle_col:
+            if show_terrain and st.button("Shuffle seed", use_container_width=True):
+                st.session_state.terrain_seed = random.randint(1, 1_000_000)
+                st.rerun()
+
+        if show_terrain:
+            with st.spinner("Rendering 3D terrain..."):
+                terrain_payload = build_search_result_terrain_payload(
+                    results=results,
+                    coords=None,  # No UMAP coords needed - function handles positioning
+                    user_risk_tolerance=user_risk_tolerance,
+                    budget_override=total_budget,
+                    random_seed=int(st.session_state.terrain_seed),
+                )
+
+            if terrain_payload:
+                selected_terrain = terrain_canvas(
+                    data=terrain_payload,
+                    height=650,
+                    key=f"terrain_canvas_{terrain_payload.get('meta', {}).get('seed', st.session_state.terrain_seed)}",
+                )
+                if selected_terrain:
+                    st.session_state.selected_terrain_product = selected_terrain
+                st.caption(
+                    "Click and drag to orbit the scene. Scroll to zoom. WASD to navigate."
+                )
+
+                selected_product = st.session_state.get("selected_terrain_product")
+                if selected_product:
+                    st.markdown("##### 🧭 Selected Terrain Product")
+                    left, right = st.columns([1, 2])
+                    with left:
+                        image_url = selected_product.get("imageUrl") or ""
+                        if image_url:
+                            st.image(image_url, width=220)
+                    with right:
+                        st.markdown(f"**{selected_product.get('name', 'Unknown Product')}**")
+                        st.caption(
+                            f"${selected_product.get('price', 0):,.2f} · "
+                            f"{selected_product.get('brand', 'Unknown')} · "
+                            f"{selected_product.get('category', 'Unknown')}"
+                        )
+                        description = selected_product.get("description") or "No description available."
+                        st.write(description)
+                        
+                        # Add to cart button for selected product
+                        if st.button("🛒 Add to Cart", key="terrain_add_cart", use_container_width=True):
+                            # Find the matching product in results
+                            for result in results:
+                                payload = result.get("payload", {})
+                                if payload.get("name") == selected_product.get("name"):
+                                    on_add_to_cart(result, st.session_state.get("search_query", ""))
+                                    break
+            else:
+                st.warning("Unable to create the terrain payload. Try again in a moment.")
+                
+    except Exception as e:
+        st.error(f"Error creating visualization: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
+def render_main_area():
+    """Render main area based on current view mode."""
+    if st.session_state.view_mode == "Swipe":
+        render_swipe_ui()
+    elif st.session_state.view_mode == "3D":
+        render_3d_landscape_ui()
+    else:
+        render_cart_ui()
 
 
 def main():

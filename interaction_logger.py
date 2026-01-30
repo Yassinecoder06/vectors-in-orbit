@@ -162,6 +162,7 @@ def _fetch_authoritative_product_data(client, product_id: str, products_collecti
             limit=1,
             with_vectors=True,
             with_payload=True,
+            timeout=30,  # 30 second timeout
         )
         
         if points:
@@ -460,6 +461,7 @@ def get_top_interacted_products(
             limit=10000,
             with_payload=True,
             with_vectors=False,
+            timeout=30,  # 30 second timeout
         )
         
         if not interactions:
@@ -610,6 +612,7 @@ def get_interaction_stats_by_type(
             limit=1000,  # Reduced for faster performance
             with_payload=True,
             with_vectors=False,
+            timeout=30,  # 30 second timeout
         )
         
         if not interactions:

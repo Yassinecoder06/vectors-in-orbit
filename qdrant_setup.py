@@ -33,7 +33,6 @@ COLLECTION_CONFIGS = {
             "user_id": models.PayloadSchemaType.KEYWORD,
             "name": models.PayloadSchemaType.KEYWORD,
             "location": models.PayloadSchemaType.KEYWORD,
-            "risk_tolerance": models.PayloadSchemaType.KEYWORD,
             "preferred_categories": models.PayloadSchemaType.KEYWORD,
             "preferred_brands": models.PayloadSchemaType.KEYWORD,
         }
