@@ -1555,30 +1555,42 @@ def render_3d_landscape_ui():
 
                 selected_product = st.session_state.get("selected_terrain_product")
                 if selected_product:
-                    st.markdown("##### 🧭 Selected Terrain Product")
-                    left, right = st.columns([1, 2])
-                    with left:
-                        image_url = selected_product.get("imageUrl") or ""
-                        if image_url:
-                            st.image(image_url, width=220)
-                    with right:
-                        st.markdown(f"**{selected_product.get('name', 'Unknown Product')}**")
-                        st.caption(
-                            f"${selected_product.get('price', 0):,.2f} · "
-                            f"{selected_product.get('brand', 'Unknown')} · "
-                            f"{selected_product.get('category', 'Unknown')}"
-                        )
-                        description = selected_product.get("description") or "No description available."
-                        st.write(description)
-                        
-                        # Add to cart button for selected product
-                        if st.button("🛒 Add to Cart", key="terrain_add_cart", use_container_width=True):
-                            # Find the matching product in results
-                            for result in results:
-                                payload = result.get("payload", {})
-                                if payload.get("name") == selected_product.get("name"):
-                                    on_add_to_cart(result, st.session_state.get("search_query", ""))
-                                    break
+                    st.markdown("---")
+                    st.markdown("### 📦 Selected Product")
+                    
+                    # Product image
+                    image_url = selected_product.get("imageUrl") or ""
+                    if image_url:
+                        st.image(image_url, use_column_width=True)
+                    
+                    # Product name - large and bold
+                    st.markdown(f"# {selected_product.get('name', 'Unknown Product')}")
+                    
+                    # Price - large and prominent
+                    price = selected_product.get('price', 0)
+                    st.markdown(f"## ${price:,.2f}")
+                    
+                    # Brand and category
+                    brand = selected_product.get('brand', 'Unknown')
+                    category = selected_product.get('category', 'Unknown')
+                    st.markdown(f"**Brand:** {brand} | **Category:** {category}")
+                    
+                    # Description - larger readable font
+                    description = selected_product.get("description") or "No description available."
+                    st.markdown("---")
+                    st.markdown("#### Product Description")
+                    st.markdown(f"<div style='font-size: 1.1rem; line-height: 1.6;'>{description}</div>", unsafe_allow_html=True)
+                    
+                    st.markdown("---")
+                    
+                    # Add to cart button for selected product
+                    if st.button("🛒 Add to Cart", key="terrain_add_cart", use_container_width=True, type="primary"):
+                        # Find the matching product in results
+                        for result in results:
+                            payload = result.get("payload", {})
+                            if payload.get("name") == selected_product.get("name"):
+                                on_add_to_cart(result, st.session_state.get("search_query", ""))
+                                break
             else:
                 st.warning("Unable to create the terrain payload. Try again in a moment.")
                 

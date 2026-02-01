@@ -1439,14 +1439,7 @@ function Scene({
       <QueryPath points={filteredPoints} visible={showQueryPath ?? true} sampleHeight={sampleHeight} />
       <ProductMarkers points={filteredPoints} onSelect={onSelect} sampleHeight={sampleHeight} />
       <ProductBillboards points={filteredPoints} onSelect={onSelect} sampleHeight={sampleHeight} />
-      <ProductLabels 
-        points={filteredPoints} 
-        onSelect={onSelect} 
-        sampleHeight={sampleHeight} 
-        onHover={onHover}
-        highlightedIds={highlightedIds}
-        onRightClick={onRightClick}
-      />
+      {/* Product labels hidden - show only images */}
       {groupLabels && groupLabels.length > 0 && (
         <GroupLabels groupLabels={groupLabels} sampleHeight={sampleHeight} />
       )}
