@@ -61,6 +61,9 @@ def normalize_image_url(url: str) -> str:
     
     if not url:
         return PLACEHOLDER_IMAGE
+
+    if url.lower() in {"undefined", "null", "none"}:
+        return PLACEHOLDER_IMAGE
     
     # Handle protocol-relative URLs
     if url.startswith("//"):
@@ -68,6 +71,10 @@ def normalize_image_url(url: str) -> str:
     
     # Validate URL scheme
     if not url.startswith(("http://", "https://", "data:")):
+        return PLACEHOLDER_IMAGE
+
+    # Filter out placeholder hosts that won't load
+    if "example.com" in url.lower():
         return PLACEHOLDER_IMAGE
     
     return url
@@ -426,10 +433,9 @@ st.markdown("""
     iframe[title*="streamlit_swipecards"],
     iframe[title*="swipe"],
     .stCustomComponentV1 iframe {
-        height: 1000px !important;
-        min-height: 1000px !important;
         width: 75% !important;
         max-width: 75% !important;
+        min-height: 1100px !important;
         margin-left: auto !important;
         margin-right: auto !important;
         display: block !important;
@@ -437,10 +443,10 @@ st.markdown("""
         box-shadow: 0 20px 60px rgba(0,0,0,0.4);
     }
     
-    /* Also target parent container */
+    /* Keep external component container aligned with internal height */
     .stCustomComponentV1 {
-        height: 1000px !important;
-        min-height: 1000px !important;
+        min-height: 1100px !important;
+        height: auto !important;
     }
     
     /* Divider styling */
@@ -523,13 +529,37 @@ function styleSwipeCards() {
                             background: linear-gradient(145deg, #252540 0%, #1a1a30 100%) !important;
                             border-radius: 20px !important;
                             box-shadow: 0 15px 40px rgba(0,0,0,0.5) !important;
+                            min-height: 900px !important;
+                            display: flex !important;
+                            flex-direction: column !important;
+                            justify-content: space-between !important;
                         }
                         img {
                             border-radius: 16px !important;
                             box-shadow: 0 10px 30px rgba(0,0,0,0.4) !important;
+                            max-height: 520px !important;
+                            width: 100% !important;
+                            object-fit: contain !important;
                         }
                     `;
                     doc.head.appendChild(style);
+                }
+
+                // Auto-fit iframe height to content to avoid clipping
+                const bodyHeight = doc.body.scrollHeight || 0;
+                const docHeight = doc.documentElement ? doc.documentElement.scrollHeight : 0;
+                const contentHeight = Math.max(bodyHeight, docHeight, 1100);
+                iframe.style.height = `${contentHeight}px`;
+                iframe.style.minHeight = `${contentHeight}px`;
+
+                if (iframe.parentElement) {
+                    iframe.parentElement.style.height = `${contentHeight}px`;
+                    iframe.parentElement.style.minHeight = `${contentHeight}px`;
+                }
+                const wrapper = iframe.closest('.stCustomComponentV1');
+                if (wrapper) {
+                    wrapper.style.height = `${contentHeight}px`;
+                    wrapper.style.minHeight = `${contentHeight}px`;
                 }
             }
         } catch(e) {
@@ -1180,7 +1210,7 @@ def render_swipe_cards():
         cards.append({
             "id": p.get("id") or p_payload.get("product_id") or f"idx_{idx}",
             "name": p_name,
-            "description": f"${p_price:,.2f}",  # Plain price, no markdown
+            "description": f"✨ {p_name} • ${p_price:,.2f} — Great value pick",
             "image": p_image,
         })
     
@@ -1473,6 +1503,43 @@ def render_3d_landscape_ui():
                     budget_override=total_budget,
                     random_seed=int(st.session_state.terrain_seed),
                 )
+
+            # Normalize image URLs inside terrain payload to avoid component load errors
+            if terrain_payload and isinstance(terrain_payload, dict):
+                # Build lookup maps from search results (Qdrant payloads)
+                id_to_payload = {}
+                name_to_payload = {}
+                for result in results:
+                    payload = result.get("payload", {})
+                    rid = str(result.get("id") or payload.get("product_id") or "").strip()
+                    if rid:
+                        id_to_payload[rid] = payload
+                    pname = str(payload.get("name") or "").strip()
+                    if pname:
+                        name_to_payload[pname] = payload
+
+                for point in terrain_payload.get("points", []):
+                    payload = None
+                    point_id = str(point.get("id") or "").strip()
+                    if point_id and point_id in id_to_payload:
+                        payload = id_to_payload[point_id]
+                    if not payload:
+                        point_name = str(point.get("name") or "").strip()
+                        payload = name_to_payload.get(point_name)
+
+                    image_candidate = None
+                    if payload:
+                        image_candidate = (
+                            payload.get("image_url")
+                            or payload.get("image")
+                            or payload.get("imageUrl")
+                        )
+                    if not image_candidate:
+                        image_candidate = point.get("imageUrl")
+
+                    normalized = normalize_image_url(image_candidate)
+                    # Avoid external placeholder in 3D component (can trigger load errors)
+                    point["imageUrl"] = "" if normalized == PLACEHOLDER_IMAGE else normalized
 
             if terrain_payload:
                 selected_terrain = terrain_canvas(

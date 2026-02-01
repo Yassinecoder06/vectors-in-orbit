@@ -38,5 +38,4 @@ demos/
 ressources/
 
 # Build output
-dist/
 .vite/
