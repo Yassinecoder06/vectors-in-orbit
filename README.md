@@ -4,8 +4,6 @@ A production-ready e-commerce recommendation system that combines semantic searc
 
 **🚀 Live Demo**: https://fin-e-trip.streamlit.app/
 
-**📹 Demo Video**: https://youtu.be/2CHaJtUHQwM
-
 ## Key Features
 
 - **Semantic Search**: Find products based on natural language understanding
@@ -22,7 +20,7 @@ A production-ready e-commerce recommendation system that combines semantic searc
 ## Architecture
 
 ### System Pipeline
-![Recommendation Pipeline](image/pipline.png)
+![Recommendation Pipeline](image/pipeline.png)
 
 The system combines data from multiple sources:
 - **Amazon/Alibaba**: Web-scraped product data with pre-processing

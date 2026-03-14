@@ -1623,3 +1623,100 @@ body,
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
+
+/* Uniform compact typography for all 3D terrain explorer text */
+.terrain-shell {
+  --terrain-text-size: 0.42rem;
+  --terrain-space-xs: 0.25rem;
+  --terrain-space-sm: 0.45rem;
+  --terrain-space-md: 0.65rem;
+}
+
+.terrain-shell :where(
+  h1, h2, h3, h4, h5, h6,
+  p, span, label, button, a,
+  input, select, textarea, li,
+  small, strong, em
+) {
+  font-size: var(--terrain-text-size) !important;
+  line-height: 1.35;
+}
+
+/* Spacing pass: filter, tour, and description views */
+.terrain-shell .filter-content,
+.terrain-shell .tour-intro,
+.terrain-shell .tour-content,
+.terrain-shell .tour-product,
+.terrain-shell .preview-content {
+  padding: var(--terrain-space-md);
+  gap: var(--terrain-space-sm);
+}
+
+.terrain-shell .filter-content,
+.terrain-shell .tour-intro,
+.terrain-shell .tour-content,
+.terrain-shell .tour-product,
+.terrain-shell .preview-content,
+.terrain-shell .tour-description,
+.terrain-shell .tour-product-meta,
+.terrain-shell .tour-nav,
+.terrain-shell .filter-section,
+.terrain-shell .filter-checkboxes,
+.terrain-shell .preview-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--terrain-space-sm);
+}
+
+.terrain-shell .tour-nav,
+.terrain-shell .tour-header,
+.terrain-shell .filter-header,
+.terrain-shell .filter-range-values,
+.terrain-shell .preview-meta {
+  flex-direction: row;
+  align-items: center;
+}
+
+.terrain-shell .tour-intro h3,
+.terrain-shell .tour-content h3,
+.terrain-shell .tour-product-info h4,
+.terrain-shell .tour-intro p,
+.terrain-shell .tour-content p,
+.terrain-shell .tour-desc-text,
+.terrain-shell .tour-desc-header,
+.terrain-shell .tour-desc-list,
+.terrain-shell .tour-desc-list li,
+.terrain-shell .preview-name,
+.terrain-shell .preview-price,
+.terrain-shell .preview-description,
+.terrain-shell .filter-label,
+.terrain-shell .filter-checkbox,
+.terrain-shell .filter-more,
+.terrain-shell .filter-count,
+.terrain-shell .tour-price,
+.terrain-shell .tour-brand,
+.terrain-shell .tour-category,
+.terrain-shell .preview-brand,
+.terrain-shell .preview-category,
+.terrain-shell .preview-rank,
+.terrain-shell .preview-score-badge {
+  margin: 0;
+}
+
+.terrain-shell .tour-description,
+.terrain-shell .preview-description {
+  line-height: 1.45;
+}
+
+.terrain-shell .filter-checkbox {
+  padding: 0;
+}
+
+.terrain-shell .tour-product-image {
+  margin-bottom: 0;
+}
+
+.terrain-shell .tour-nav {
+  justify-content: space-between;
+  padding: var(--terrain-space-sm) var(--terrain-space-md);
+}
